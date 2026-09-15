@@ -1,0 +1,72 @@
+name: Production deploy
+
+# Automatic on push to main here (i.e. once this repo's production config is
+# updated/merged), plus manual dispatch for a hotfix redeploy of a specific
+# ref. Both app repos default to `main` — unlike sandbox, production doesn't
+# take arbitrary branch inputs on the automatic path.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "production/**"
+      - ".github/workflows/production-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      ui_ref:
+        description: "brainkb-ui ref to deploy"
+        required: true
+        default: "main"
+      backend_ref:
+        description: "BrainKB ref to deploy"
+        required: true
+        default: "main"
+
+jobs:
+  deploy:
+    # Assumes a self-hosted runner living on the production host, with Docker
+    # installed. Replace with an SSH-based deploy step if production runs
+    # elsewhere and this workflow only orchestrates from GitHub-hosted runners.
+    runs-on: [self-hosted, production]
+    environment: production
+    steps:
+      - name: Checkout brainkb-infrastructure
+        uses: actions/checkout@v4
+        with:
+          path: brainkb-infrastructure
+
+      - name: Checkout brainkb-ui
+        uses: actions/checkout@v4
+        with:
+          repository: sensein/brainkb-ui
+          ref: ${{ inputs.ui_ref || 'main' }}
+          path: brainkb-ui
+
+      - name: Checkout BrainKB
+        uses: actions/checkout@v4
+        with:
+          repository: sensein/BrainKB
+          ref: ${{ inputs.backend_ref || 'main' }}
+          path: BrainKB
+
+      - name: Ensure production network exists
+        run: docker network inspect brainkb-network >/dev/null 2>&1 || docker network create brainkb-network
+
+      - name: Deploy production backend (Docker)
+        working-directory: brainkb-infrastructure/production
+        env:
+          # Populate from repo/environment secrets — .env is never committed.
+          ENV_FILE_CONTENTS: ${{ secrets.PRODUCTION_BACKEND_ENV_FILE }}
+        run: |
+          echo "$ENV_FILE_CONTENTS" > .env
+          docker compose up -d --build
+
+      - name: Deploy production frontend (PM2, not Docker)
+        # bin/up-node.sh; deploy_without_docker.sh is dead code — see bootstrap.md.
+        working-directory: brainkb-ui
+        env:
+          ENV_FILE_CONTENTS: ${{ secrets.PRODUCTION_UI_ENV_FILE }}
+          PM2_APP_NAME: brainkb-ui
+          PORT: "3000"
+        run: |
+          echo "$ENV_FILE_CONTENTS" > .env.local
+          bash bin/up-node.sh

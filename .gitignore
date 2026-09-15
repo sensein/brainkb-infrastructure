@@ -1,0 +1,5 @@
+.env
+production/.env
+sandbox/.env
+*.env.local
+.DS_Store

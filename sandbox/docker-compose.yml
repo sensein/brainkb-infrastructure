@@ -1,0 +1,153 @@
+# Sandbox backend stack for BrainKB (sensein/BrainKB).
+#
+# Same service shape as production/docker-compose.yml, minus the frontend —
+# see that file's header for why the UI isn't containerized at all (an
+# Next.js-to-backend Docker networking issue, really a
+# NEXT_PUBLIC_*-vars-need-real-public-URLs problem). Sandbox's UI is
+# deployed the same way production's is: PM2 directly on the host, via
+# brainkb-ui's own `bin/up-node.sh`. See ./README.md.
+#
+# This stack is on its own Docker network and uses container names / default
+# ports that don't collide with production's, since sandbox is expected to
+# run on the SAME EC2 instance as production (confirmed fine — instance is
+# essentially idle). No FSx/S3 mount is needed for sandbox's Oxigraph data;
+# plain Docker named volumes are fine here (FSx is a production-only,
+# exact-replica concern, not a sandbox requirement).
+#
+# Historically brainkb-ui's own docker-compose-sandbox.yml only ran the UI —
+# it never joined the backend network, so sandbox never actually exercised
+# the full stack. This repo fixes that by giving sandbox a real backend to
+# run against.
+#
+# Prerequisites:
+#   docker network create brainkb-sandbox-network   # once per host
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: brainkb-postgres-sandbox
+    environment:
+      POSTGRES_USER: ${JWT_POSTGRES_DATABASE_USER:-postgres}
+      POSTGRES_PASSWORD: ${JWT_POSTGRES_DATABASE_PASSWORD:-postgres}
+      POSTGRES_DB: ${JWT_POSTGRES_DATABASE_NAME:-brainkb}
+    ports:
+      # POSTGRES_HOST_PORT (host-side only) is deliberately separate from
+      # JWT_POSTGRES_DATABASE_PORT (the app's internal connection port, which
+      # must stay 5432 — that's what Postgres actually listens on inside the
+      # Docker network, regardless of what host port this is mapped to).
+      - "${POSTGRES_HOST_PORT:-15432}:5432"
+    volumes:
+      - postgres_data_sandbox:/var/lib/postgresql/data
+    networks:
+      - brainkb-sandbox-network
+    restart: unless-stopped
+    command: postgres -c max_connections=200 -c shared_buffers=256MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${JWT_POSTGRES_DATABASE_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  brainkb-unified:
+    build:
+      context: ${BACKEND_REPO_PATH:-../../BrainKB}
+      dockerfile: Dockerfile.unified
+    container_name: brainkb-unified-sandbox
+    env_file:
+      - .env
+    ports:
+      - "${API_TOKEN_PORT:-18000}:8000"
+      - "${QUERY_SERVICE_PORT:-18010}:8010"
+      - "${ML_SERVICE_PORT:-18007}:8007"
+      - "${USERMANAGEMENT_SERVICE_PORT:-18004}:8004"
+    volumes:
+      - backend_logs_sandbox:/var/log/supervisor
+    networks:
+      - brainkb-sandbox-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8000/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  oxigraph:
+    image: ghcr.io/oxigraph/oxigraph:latest
+    container_name: brainkb-oxigraph-sandbox
+    volumes:
+      - ${OXIGRAPH_DATA_PATH:-oxigraph_data_sandbox}:/data
+      - ${OXIGRAPH_TMP_PATH:-oxigraph_tmp_sandbox}:/tmp
+    environment:
+      - TMPDIR=/tmp
+    command: ["serve", "--location", "/data", "--bind", "0.0.0.0:7878"]
+    ulimits:
+      fsize: -1
+      nofile: 65536
+    networks:
+      - brainkb-sandbox-network
+    restart: unless-stopped
+
+  oxigraph-nginx:
+    image: nginx:1.21.4
+    container_name: brainkb-oxigraph-nginx-sandbox
+    env_file:
+      - .env
+    environment:
+      OXIGRAPH_USER: ${OXIGRAPH_USER:-admin}
+      OXIGRAPH_PASSWORD: ${OXIGRAPH_PASSWORD:-pwdoxigraph}
+    volumes:
+      - ${BACKEND_REPO_PATH:-../../BrainKB}/oxigraph/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${OXIGRAPH_PORT:-17878}:7878"
+    networks:
+      - brainkb-sandbox-network
+    depends_on:
+      - oxigraph
+    restart: unless-stopped
+    ulimits:
+      nofile: 65536
+    entrypoint: >
+      sh -c 'echo -n "$$OXIGRAPH_USER:" > /etc/nginx/.htpasswd &&
+      echo "$$OXIGRAPH_PASSWORD" | openssl passwd -stdin -apr1 >> /etc/nginx/.htpasswd &&
+      chmod 644 /etc/nginx/.htpasswd &&
+      /docker-entrypoint.sh nginx -g "daemon off;"'
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: brainkb-pgadmin-sandbox
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@brainkb.org}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-admin}
+      PGADMIN_SERVER_NAME: ${PGADMIN_SERVER_NAME:-BrainKB PostgreSQL (sandbox)}
+    ports:
+      - "${PGADMIN_PORT:-15051}:80"
+    volumes:
+      - pgadmin_data_sandbox:/var/lib/pgadmin
+      - ${BACKEND_REPO_PATH:-../../BrainKB}/pgadmin-init/servers.json:/pgadmin4/servers.json:ro
+    networks:
+      - brainkb-sandbox-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data_sandbox:
+    driver: local
+  oxigraph_data_sandbox:
+    driver: local
+  oxigraph_tmp_sandbox:
+    driver: local
+  pgadmin_data_sandbox:
+    driver: local
+  backend_logs_sandbox:
+    driver: local
+
+networks:
+  brainkb-sandbox-network:
+    external: true
+    name: brainkb-sandbox-network

@@ -1,0 +1,70 @@
+name: Sandbox deploy
+
+# Manual only, by design: sandbox exists to preview a specific combination of
+# UI + backend branches before they land on main. Pick both independently —
+# if brainkb-ui and BrainKB are ever merged into one repo, drop one input and
+# the single checkout step that follows it.
+on:
+  workflow_dispatch:
+    inputs:
+      ui_branch:
+        description: "brainkb-ui branch/ref to deploy"
+        required: true
+        default: "main"
+      backend_branch:
+        description: "BrainKB branch/ref to deploy"
+        required: true
+        default: "main"
+
+jobs:
+  deploy:
+    # Assumes a self-hosted runner living on the sandbox host, with Docker
+    # installed. Replace with an SSH-based deploy step if sandbox runs
+    # elsewhere and this workflow only orchestrates from GitHub-hosted runners.
+    runs-on: [self-hosted, sandbox]
+    steps:
+      - name: Checkout brainkb-infrastructure
+        uses: actions/checkout@v4
+        with:
+          path: brainkb-infrastructure
+
+      - name: Checkout brainkb-ui
+        uses: actions/checkout@v4
+        with:
+          repository: sensein/brainkb-ui
+          ref: ${{ inputs.ui_branch }}
+          path: brainkb-ui
+
+      - name: Checkout BrainKB
+        uses: actions/checkout@v4
+        with:
+          repository: sensein/BrainKB
+          ref: ${{ inputs.backend_branch }}
+          path: BrainKB
+
+      - name: Ensure sandbox network exists
+        run: docker network inspect brainkb-sandbox-network >/dev/null 2>&1 || docker network create brainkb-sandbox-network
+
+      - name: Deploy sandbox backend (Docker)
+        working-directory: brainkb-infrastructure/sandbox
+        env:
+          # Populate from repo/environment secrets — .env is never committed.
+          # BACKEND_REPO_PATH defaults correctly for this checkout layout.
+          ENV_FILE_CONTENTS: ${{ secrets.SANDBOX_BACKEND_ENV_FILE }}
+        run: |
+          echo "$ENV_FILE_CONTENTS" > .env
+          docker compose up -d --build
+
+      - name: Deploy sandbox frontend (PM2, not Docker)
+        # bin/up-node.sh natively supports PM2_APP_NAME + PORT overrides, so
+        # this coexists safely with production's own `brainkb-ui` PM2
+        # process on the same host. deploy_without_docker.sh is dead code —
+        # see bootstrap.md.
+        working-directory: brainkb-ui
+        env:
+          ENV_FILE_CONTENTS: ${{ secrets.SANDBOX_UI_ENV_FILE }}
+          PM2_APP_NAME: brainkb-ui-sandbox
+          PORT: "3080"
+        run: |
+          echo "$ENV_FILE_CONTENTS" > .env.local
+          bash bin/up-node.sh
