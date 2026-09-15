@@ -31,6 +31,14 @@ Same as production (see `../production/README.md`), but create the sandbox netwo
 docker network create brainkb-sandbox-network
 ```
 
+(See production's README for why this has to be created manually — the
+network is declared `external: true` in `docker-compose.yml` so its name
+stays fixed. Only needed once per host.)
+
+If `docker` commands fail with "permission denied ... docker.sock" and there's
+no `docker` group on the host (`usermod: group 'docker' does not exist`),
+prefix every `docker`/`docker compose` command with `sudo` instead.
+
 `.env` in this directory, copied from `backend.env.template`.
 
 ### Deploy

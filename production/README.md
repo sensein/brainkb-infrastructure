@@ -26,6 +26,15 @@ the repo root.
    docker network create brainkb-network
    ```
 
+   Why this manual step exists: `docker-compose.yml` declares this network as
+   `external: true` — meaning "this must already exist, don't create or manage
+   it for me." That's deliberate: a plain `docker compose up` would otherwise
+   name the network after the current directory, which isn't stable across
+   different checkout paths or compose invocations. Declaring it external
+   keeps the name fixed and predictable, at the cost of this one-time manual
+   step. It only needs to be created once per host — it persists across every
+   future `up`/`down` cycle.
+
 3. The AWS FSx filesystem for Oxigraph data already mounted on the host (e.g. at
    `/fsx/brainkb-kg-repo`) via plain Linux `mount`, **before** `docker compose up`. This is
    not something Docker or this repo sets up — confirm the current filesystem ID / mount
