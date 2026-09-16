@@ -109,13 +109,23 @@ instead of 13000 — fixed once noticed, see commit `68512de`.)
    - Final rule list confirmed correct: rule 1 → usermanagement tg, rule 2 → mlservice
      tg, default (last) → `sandbox-ui-tg`.
 
+7b. **Pointed DNS at the new ALB** — Route53 → Hosted zones → `brainkb.org`:
+   - **Edited** the existing `sandbox.brainkb.org` A record (the stale one pointing at
+     `192.2.0.233`) → toggled Alias: Yes → Alias to Application/Classic Load Balancer →
+     `us-east-2` → `sandbox-alb` (the `dualstack.` DNS name — same ALB, just the
+     IPv4+IPv6 name AWS shows by default; not a different resource) → Routing policy:
+     Simple → Evaluate Target Health: **off** (no failover benefit with a single Simple
+     record; leaving it on would make DNS stop resolving entirely whenever a target
+     group's health check isn't passing, e.g. before the UI is even deployed).
+   - **Created** new alias records the same way for `usermanagement.sandbox` and
+     `mlservice.sandbox` (Route53 auto-appends `.brainkb.org` to whatever's typed in
+     "Record name" inside this hosted zone — just the subdomain prefix is needed).
+   - Verified via `dig`: all 3 domains resolve, and all return the *same* 2 IPs
+     (`3.141.226.221`, `3.139.148.61`) — confirms they're genuinely sharing the one
+     ALB, unlike production's separate-ALB-per-domain setup.
+
 ## Steps still to do
 
-7b. Point DNS at the new ALB:
-   - **Edit** the existing `sandbox.brainkb.org` A record → change to an ALIAS
-     pointing at the new ALB's DNS name (can't create a duplicate record name).
-   - **Create** new ALIAS records for `usermanagement.sandbox.brainkb.org` and
-     `mlservice.sandbox.brainkb.org`, also pointing at the same ALB.
 8. Check/update security groups: the ALB needs inbound 443 from the internet, and
    the EC2 instance needs to accept traffic from the ALB's security group on ports
    13000/18004/18007.
