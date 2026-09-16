@@ -124,11 +124,21 @@ instead of 13000 — fixed once noticed, see commit `68512de`.)
      (`3.141.226.221`, `3.139.148.61`) — confirms they're genuinely sharing the one
      ALB, unlike production's separate-ALB-per-domain setup.
 
+8. **Updated the EC2 instance's security group** (`launch-wizard-25` /
+   `sg-00ae856ca219ae663` — found via the instance's own Security Groups page, not the
+   read-only summary under the instance's Security tab, which doesn't have an edit
+   button). Added 3 inbound rules, each with **Source: Custom → `sandbox-alb-sg`**
+   (not `0.0.0.0/0`) — so only the ALB can reach these ports, not the whole internet:
+   - Port `13000`, description "sandbox UI"
+   - Port `18004`, description "sandbox oauth callback user management"
+   - Port `18007`, description "sandbox ml structsense"
+   - Side observation: every one of production's existing rules on this security group
+     (including SSH, port 22) is open to `0.0.0.0/0` directly — the one exception is
+     the Lustre/FSx rule, restricted to a specific security group. Worth mentioning to
+     Tek as a hardening opportunity sometime, not touched/fixed here.
+
 ## Steps still to do
 
-8. Check/update security groups: the ALB needs inbound 443 from the internet, and
-   the EC2 instance needs to accept traffic from the ALB's security group on ports
-   13000/18004/18007.
 9. Deploy the UI via PM2 on the EC2 instance (separate checkout from production's,
    same pattern as the backend), `.env.local` pointing at these real domains instead
    of localhost.
