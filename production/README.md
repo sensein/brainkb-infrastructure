@@ -73,6 +73,13 @@ Ollama is not part of this compose file at all — it's started separately (see 
    env-overridable, default `brainkb-ui` / `3000`). `brainkb-ui/deploy_without_docker.sh` is
    dead code — don't use it, see `bootstrap.md`.
 
+**⚠ `brainkb-ui/.env.local` is a tracked file in that repo (not gitignored).** Copying
+`ui.env.template` over it overwrites brainkb-ui's own committed version, not an
+ignored/untouched file — `git status` there will show it as locally modified, and a future
+`git pull` on that checkout can conflict with brainkb-ui's own committed `.env.local`
+instead of silently leaving yours alone. Check `git status` before pulling, and be ready
+to resolve a conflict on that one file.
+
 ## Part 3: Ollama (optional, not in this compose file)
 
 `BrainKB/start_services.sh` starts Ollama separately via a raw `docker run`, auto-detecting

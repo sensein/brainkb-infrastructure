@@ -17,9 +17,12 @@ Differences from production:
   (leave `OXIGRAPH_DATA_PATH`/`OXIGRAPH_TMP_PATH` blank in `.env`). FSx is a production-only,
   exact-replica concern.
 - Domain naming mirrors production's convention with `.sandbox` inserted, e.g. production's
-  `usermanagement.brainkb.org` → sandbox's `usermanagement.sandbox.brainkb.org`. Sandbox needs
-  its own ALB + ACM certificate + Route53 record for this — nothing here provisions that yet.
-  ML/query/chat can stay direct-host-port for sandbox too, same as production currently.
+  `usermanagement.brainkb.org` → sandbox's `usermanagement.sandbox.brainkb.org`. **Live and
+  working** — one shared ALB + one ACM cert + Route53 records for `sandbox.brainkb.org`,
+  `usermanagement.sandbox.brainkb.org`, `mlservice.sandbox.brainkb.org` (query_service and
+  chat_service stay direct-host-port, matching production's own pattern there). Full manual
+  setup steps, decisions, and gotchas are in `../notes.md` — start there if setting this up
+  again from scratch.
 
 ## Part 1: Backend (this repo)
 
@@ -59,3 +62,12 @@ Same as production's Part 2, but:
 - Invoke `bin/up-node.sh` with `PM2_APP_NAME=brainkb-ui-sandbox PORT=13000` — both are
   natively env-overridable, so this coexists safely with production's `brainkb-ui` PM2
   process on the same host with no code changes needed.
+
+**⚠ `brainkb-ui/.env.local` is a tracked file in that repo (not gitignored — see
+`bootstrap.md`).** Copying `ui.env.template` over it overwrites brainkb-ui's own committed
+version, not an ignored/untouched file. This means:
+- `git status` in that checkout will show `.env.local` as locally modified, not untracked.
+- A future `git pull` there can conflict with brainkb-ui's own committed `.env.local`,
+  rather than silently leaving your copy alone the way a gitignored file would.
+Check `git status` before pulling that checkout again, and be ready to resolve a conflict
+on that specific file.

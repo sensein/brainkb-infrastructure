@@ -183,6 +183,13 @@ changes needed on the backend side; the ALB/DNS/security-group setup alone did i
    won't fully work without them, but wasn't blocking this verification. Build succeeded
    (a few expected cache-warming 403s from the blank JWT creds, and one pre-existing
    unrelated webpack warning about `rdf-canonize-native` — neither blocks the build).
+
+   **⚠ That `cp` overwrote a file that's tracked in brainkb-ui's own git repo** —
+   `.env.local` is not gitignored there (see `bootstrap.md`). So this checkout's
+   `.env.local` is no longer brainkb-ui's committed version; `git status` in
+   `~/sandbox-workspace/brainkb-ui` now shows it as locally modified, not untracked.
+   A future `git pull` there can conflict with brainkb-ui's own committed `.env.local`
+   — check `git status` first and be ready to resolve a conflict on that one file.
    PM2 process `brainkb-ui-sandbox` came up `online` on port 13000, no collision with
    production's own `brainkb-ui` PM2 process.
    - **Verified**: `curl -sI https://sandbox.brainkb.org/` → `HTTP/2 200`,
