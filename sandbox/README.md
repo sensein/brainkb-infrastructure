@@ -71,3 +71,44 @@ version, not an ignored/untouched file. This means:
   rather than silently leaving your copy alone the way a gitignored file would.
 Check `git status` before pulling that checkout again, and be ready to resolve a conflict
 on that specific file.
+
+## Testing new code (once the initial setup above is already done)
+
+The AWS side (ALB, target groups, DNS, certificate, security groups) is durable and
+persists regardless of what code is deployed — none of it needs to be touched again for
+routine testing. Only revisit it if adding a new domain/service. Everything below assumes
+the checkouts already exist (e.g. under `~/sandbox-workspace/` on the EC2 instance) and
+just need updating.
+
+**Backend (BrainKB):**
+```
+cd BrainKB && git checkout <branch> && git pull
+cd ../brainkb-infrastructure/sandbox && docker compose up -d --build   # (sudo if needed)
+```
+Confirm it's actually healthy afterward, not just that the containers started:
+```
+docker exec brainkb-unified-sandbox supervisorctl status
+```
+All 4 services (`api_tokenmanager`, `query_service`, `ml_service`,
+`usermanagement_service`) should show `RUNNING` and stay that way — a service that starts
+and then crash-loops (`BACKOFF`/`FATAL`) won't show up as broken from `docker ps` alone.
+
+**Frontend (brainkb-ui):**
+```
+cd brainkb-ui && git status   # check before pulling — see the .env.local warning above
+git checkout <branch> && git pull
+PM2_APP_NAME=brainkb-ui-sandbox PORT=13000 bash bin/up-node.sh
+```
+This rebuilds the Next.js app (`NEXT_PUBLIC_*` values get baked in fresh each time) and
+reloads the PM2 process in place.
+
+**Verifying it's actually live**, not just that the process/container started:
+```
+curl -sI --max-time 10 https://sandbox.brainkb.org/
+curl -sI --max-time 10 https://usermanagement.sandbox.brainkb.org/
+curl -sI --max-time 10 https://mlservice.sandbox.brainkb.org/
+```
+Any real HTTP response (even a `404`/`405`) confirms the full chain works — DNS → ALB
+(TLS) → target group → the service itself. See `../notes.md` ("How to check whether a
+domain is actually working end-to-end") for how to interpret the results, and what a
+genuine failure looks like instead.
