@@ -98,11 +98,19 @@ instead of 13000 — fixed once noticed, see commit `68512de`.)
    - Secure listener settings (TLS security policy): left on AWS default.
    - **Successfully created.**
 
+7a. **Added 2 more listener rules** on the HTTPS:443 listener, via "Add rule" (not
+   "Edit rule" — that would've modified the existing default rule instead):
+   - Priority 1: Host header = `usermanagement.sandbox.brainkb.org` → forward to
+     `sandbox-usermanagement-tg`
+   - Priority 2: Host header = `mlservice.sandbox.brainkb.org` → forward to
+     `sandbox-mlservice-tg`
+   - Left "Transforms" and "Target group stickiness" alone (not needed); pre-routing
+     action "No pre-routing action" on both (same reasoning as the default listener).
+   - Final rule list confirmed correct: rule 1 → usermanagement tg, rule 2 → mlservice
+     tg, default (last) → `sandbox-ui-tg`.
+
 ## Steps still to do
 
-7a. Add 2 more listener rules on the HTTPS:443 listener (host-header conditions):
-   - Host = `usermanagement.sandbox.brainkb.org` → forward to `sandbox-usermanagement-tg`
-   - Host = `mlservice.sandbox.brainkb.org` → forward to `sandbox-mlservice-tg`
 7b. Point DNS at the new ALB:
    - **Edit** the existing `sandbox.brainkb.org` A record → change to an ALIAS
      pointing at the new ALB's DNS name (can't create a duplicate record name).
