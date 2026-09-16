@@ -47,19 +47,44 @@ Region: **us-east-2**.
 4. Waited a few minutes for DNS propagation + ACM's re-check. All 3 domains now show
    **validation status: Success**.
 
+5. **Created 3 target groups** (Application Load Balancer type, Instance target type,
+   HTTP), one per backend port, all in `vpc-056bce0f8a2a73bfe`:
+   - `sandbox-ui-tg` — port 13000
+   - `sandbox-usermanagement-tg` — port 18004
+   - `sandbox-mlservice-tg` — port 18007
+   All 3 registered the EC2 instance (`i-02f4d763f21e415f0`) as their target — showed
+   "Unused" health status, expected since no ALB existed yet at that point.
+   - Note: found a naming gotcha — AWS target group names don't allow underscores,
+     only letters/numbers/hyphens.
+   - Side finding: production already has its own `usermanagement-tg` (port 80)
+     attached to an ALB named `usermanagement-lb-for-globus` — confirms production's
+     one-ALB-per-domain pattern, and that this particular one exists because Globus
+     OAuth needs a real HTTPS callback domain.
+6. **Created a dedicated security group** `sandbox-alb-sg` (`sg-02e6912482926898b`) for
+   the ALB, rather than reusing the VPC's shared `default` security group (to avoid any
+   inbound rule we add here also applying to other resources sharing `default`).
+   Inbound: TCP 443 and TCP 80, both from `0.0.0.0/0` (Anywhere-IPv4) — expected/required
+   for a public-facing web load balancer, despite AWS's generic "restrict to known IPs"
+   warning (that warning is much more relevant to things like SSH than public HTTPS).
+   Outbound: left on the default "all traffic" rule.
+7. **Created the ALB**: `sandbox-alb`, Internet-facing, VPC `vpc-056bce0f8a2a73bfe`,
+   2+ AZs, security group `sandbox-alb-sg` (not `default`).
+   - Listener: HTTPS : 443, certificate = the one covering all 3 sandbox domains.
+   - Pre-routing action: none (no ALB-level auth/JWT validation — usermanagement_service
+     already handles OAuth + JWT itself; adding it at the ALB too would be redundant/
+     conflicting).
+   - Default routing action: forward to `sandbox-ui-tg` only (this is the fallback for
+     any request that doesn't match a more specific host-based rule — implicitly covers
+     `sandbox.brainkb.org` itself, so no explicit rule is strictly needed for that one).
+   - Secure listener settings (TLS security policy): left on AWS default.
+   - **Successfully created.**
+
 ## Steps still to do
 
-5. Create 3 target groups (Application Load Balancer type), one per backend port:
-   - UI: port 13000
-   - usermanagement_service: port 18004
-   - ml_service: port 18007
-   Each registers the EC2 instance itself as the target.
-6. Create the ALB itself:
-   - HTTPS:443 listener, using the now-issued certificate.
-   - 3 host-based routing rules (one per domain), each forwarding to its
-     corresponding target group above.
-   - (Consider also an HTTP:80 → HTTPS:443 redirect listener.)
-7. Point DNS at the new ALB:
+7a. Add 2 more listener rules on the HTTPS:443 listener (host-header conditions):
+   - Host = `usermanagement.sandbox.brainkb.org` → forward to `sandbox-usermanagement-tg`
+   - Host = `mlservice.sandbox.brainkb.org` → forward to `sandbox-mlservice-tg`
+7b. Point DNS at the new ALB:
    - **Edit** the existing `sandbox.brainkb.org` A record → change to an ALIAS
      pointing at the new ALB's DNS name (can't create a duplicate record name).
    - **Create** new ALIAS records for `usermanagement.sandbox.brainkb.org` and
