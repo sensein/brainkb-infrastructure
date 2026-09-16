@@ -21,6 +21,25 @@ Region: **us-east-2**.
 - **One ACM certificate** covering all 3 domain names, rather than 3 separate certs —
   simpler to manage, attaches to the single ALB just as easily.
 
+## Port convention: sandbox port = production port + 10000
+
+No exceptions — applied uniformly so there's never any ambiguity about which port
+belongs to which environment on the shared EC2 instance.
+
+| Service              | Production | Sandbox |
+|----------------------|-----------:|--------:|
+| UI                   |       3000 |   13000 |
+| API token manager    |       8000 |   18000 |
+| Usermanagement       |       8004 |   18004 |
+| ML service           |       8007 |   18007 |
+| Query service        |       8010 |   18010 |
+| Oxigraph             |       7878 |   17878 |
+| pgAdmin              |       5051 |   15051 |
+| Postgres             |       5432 |   15432 |
+
+(The UI port briefly broke this rule during early ad-hoc local testing — used 3080
+instead of 13000 — fixed once noticed, see commit `68512de`.)
+
 ## Found along the way
 
 - `sandbox.brainkb.org` already had a Route53 **A record** (not alias) pointing at a
