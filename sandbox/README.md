@@ -54,8 +54,8 @@ whatever branch you pick and runs this compose file against it.
 ## Part 2: Frontend (brainkb-ui, PM2 — not in this repo's compose)
 
 Same as production's Part 2, but:
-- Copy `ui.env.template` (this directory's version, with sandbox's `PORT=3080` default) to
+- Copy `ui.env.template` (this directory's version, with sandbox's `PORT=13000` default) to
   `brainkb-ui/.env.local` instead.
-- Invoke `bin/up-node.sh` with `PM2_APP_NAME=brainkb-ui-sandbox PORT=3080` — both are
+- Invoke `bin/up-node.sh` with `PM2_APP_NAME=brainkb-ui-sandbox PORT=13000` — both are
   natively env-overridable, so this coexists safely with production's `brainkb-ui` PM2
   process on the same host with no code changes needed.
