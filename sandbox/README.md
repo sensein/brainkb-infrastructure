@@ -21,7 +21,7 @@ Differences from production:
   working** — one shared ALB + one ACM cert + Route53 records for `sandbox.brainkb.org`,
   `usermanagement.sandbox.brainkb.org`, `mlservice.sandbox.brainkb.org` (query_service and
   chat_service stay direct-host-port, matching production's own pattern there). Full manual
-  setup steps, decisions, and gotchas are in `../notes.md` — start there if setting this up
+  setup steps, decisions, and gotchas are in `notes.md` — start there if setting this up
   again from scratch.
 
 ## Part 1: Backend (this repo)
@@ -109,6 +109,20 @@ curl -sI --max-time 10 https://usermanagement.sandbox.brainkb.org/
 curl -sI --max-time 10 https://mlservice.sandbox.brainkb.org/
 ```
 Any real HTTP response (even a `404`/`405`) confirms the full chain works — DNS → ALB
-(TLS) → target group → the service itself. See `../notes.md` ("How to check whether a
+(TLS) → target group → the service itself. See `notes.md` ("How to check whether a
 domain is actually working end-to-end") for how to interpret the results, and what a
 genuine failure looks like instead.
+
+## Still open: loading data into Oxigraph
+
+Sandbox's Oxigraph starts **completely empty** (plain Docker volume, no FSx — see
+above), and there's no working path yet to load anything into it:
+- The app's own ingest UI (`/user/ingest-kg`) needs a logged-in admin session, and login
+  doesn't work yet (no OAuth providers configured — see `notes.md`).
+- Going straight to Oxigraph's own SPARQL Graph Store protocol (bypassing the app) is
+  possible in principle — it's Basic-Auth protected with `OXIGRAPH_USER`/`PASSWORD`,
+  already set — but untested, and its port (`17878`) isn't open externally (only
+  reachable from inside the instance, e.g. `curl localhost:17878`). Not yet confirmed
+  what request format Oxigraph actually expects here.
+
+Needs a real session to work through — not done, not blocking anything else.
