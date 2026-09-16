@@ -192,6 +192,46 @@ changes needed on the backend side; the ALB/DNS/security-group setup alone did i
 **All 3 sandbox domains are now genuinely live and working end-to-end**:
 `sandbox.brainkb.org`, `usermanagement.sandbox.brainkb.org`, `mlservice.sandbox.brainkb.org`.
 
+## What doesn't work right now because of blank/placeholder secrets
+
+Current `.env` (backend) and `.env.local` (UI) use the smoke-test values from
+`sandbox/backend.env.smoketest.example` / `sandbox/ui.env.template` — real domains, but
+several credentials deliberately left blank. Concretely, this means:
+
+- **No login at all, for any provider.** `GITHUB_CLIENT_ID/SECRET`,
+  `ORCID_CLIENT_ID/SECRET`, `GLOBUS_CLIENT_ID/SECRET` are all blank in the backend
+  `.env`. Since "the UI asks the backend which providers are configured and renders
+  only those buttons," the login page likely shows **zero** provider buttons, not just
+  broken ones. (Globus specifically is why production has a dedicated
+  `usermanagement-lb-for-globus` ALB — that flow can't be tested at all yet.)
+- **Most data-driven UI pages will show empty/error states.** `NEXT_PUBLIC_JWT_USER`/
+  `PASSWORD` (the UI's own service-account credentials for calling the backend) are
+  blank. Seen directly during the build: `Failed to get bearer token, proceeding
+  without authentication`, followed by `fetch failed` / `API returned 403` for
+  statistics, knowledge-base pages, NER, and Resources caches. Any page that needs
+  this service-account token to fetch data will likely be empty or show an error,
+  even though the pages themselves load fine (HTTP 200).
+- **No SuperAdmin exists.** `USERMANAGEMENT_BOOTSTRAP_SUPERADMIN_EMAILS` is blank, so
+  nobody gets bootstrapped into the SuperAdmin role on startup.
+- **NER features won't work.** `MONGO_DB_URL` is blank — anything backed by
+  `NER_DATABASE`/`NER_COLLECTION` (NER get/save) has nowhere to read/write.
+- **Weaviate-backed KG source features are off.** `WEAVIATE_API_KEY`/`GRPC_HOST`/
+  `HTTP_HOST` blank, and `ENABLE_KG_SOURCE=False` — this is otherwise-intentional for a
+  smoke test, not just a side effect of blank values.
+- **PDF extraction won't work.** `GROBID_SERVER_URL_OR_EXTERNAL_SERVICE` is blank.
+- **SynthScholar's external literature search fan-out is degraded, not broken.**
+  `OPENROUTER_API_KEY`, `NCBI_API_KEY`, `SEMANTIC_SCHOLAR_API_KEY`, `CORE_API_KEY` are
+  all blank — per their own code comments these are each independently optional and
+  silently skipped if absent, so search still runs, just against fewer sources (and
+  OpenRouter is only the operator-fallback key anyway; a per-user key would still work
+  if supplied through the UI at request time).
+- **No centralized logging.** `LOGTAIL_API_KEY` blank — logs stay local to the
+  container/host instead of being shipped anywhere.
+
+**What this does NOT affect**: the deployment pipeline itself (DNS, TLS, ALB routing,
+security groups, the actual services running and responding) — all of that is fully
+confirmed working, independent of any of these credentials.
+
 ## Steps still to do (optional, not blocking)
 
 10. Update OAuth app redirect URIs (GitHub/ORCID/Globus) to include
