@@ -137,6 +137,38 @@ instead of 13000 — fixed once noticed, see commit `68512de`.)
      the Lustre/FSx rule, restricted to a specific security group. Worth mentioning to
      Tek as a hardening opportunity sometime, not touched/fixed here.
 
+## How to check whether a domain is actually working end-to-end
+
+```
+curl -sI --max-time 10 https://usermanagement.sandbox.brainkb.org/
+curl -sI --max-time 10 https://mlservice.sandbox.brainkb.org/
+```
+
+`-I` sends a HEAD request and only prints the response headers (fast, doesn't download
+anything); `--max-time 10` stops it from hanging if something's actually unreachable.
+
+**How to read the result**: any real HTTP response — even a `404` or `405` — means it
+worked. That means the request made it all the way through DNS → ALB (TLS handled
+correctly) → the ALB's host-based routing rule → the target group → the actual backend
+service, and the *service itself* answered. A `404`/`405` just means that specific
+path/method isn't defined by the app (e.g. `usermanagement_service`'s root path only
+supports GET, not HEAD; `ml_service` has no route at `/` at all) — normal app behavior,
+not a routing failure. Look for `server: uvicorn` (or whatever the real backend
+announces) in the response headers as the confirming detail — that's the backend
+itself speaking, not some earlier layer (ALB, Route53, or a security-group block)
+silently swallowing the request.
+
+**What actually indicates a problem**, in contrast: `curl: (28) Connection timed out`
+(security group blocking the ALB from reaching the instance, or nothing listening on
+that port), `curl: (60) SSL certificate problem` (cert issue), or a `503`/`504` from
+the ALB itself (no healthy targets in the target group) — none of which showed up here.
+
+Verified this way for `usermanagement.sandbox.brainkb.org` (405, `allow: GET`) and
+`mlservice.sandbox.brainkb.org` (404) — both genuinely working end-to-end, with zero
+changes needed on the backend side; the ALB/DNS/security-group setup alone did it.
+`sandbox.brainkb.org` itself can't be checked this way yet since the UI isn't deployed
+there — nothing is listening on port 13000 on the instance yet (still step 9 below).
+
 ## Steps still to do
 
 9. Deploy the UI via PM2 on the EC2 instance (separate checkout from production's,
