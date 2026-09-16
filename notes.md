@@ -166,14 +166,36 @@ the ALB itself (no healthy targets in the target group) — none of which showed
 Verified this way for `usermanagement.sandbox.brainkb.org` (405, `allow: GET`) and
 `mlservice.sandbox.brainkb.org` (404) — both genuinely working end-to-end, with zero
 changes needed on the backend side; the ALB/DNS/security-group setup alone did it.
-`sandbox.brainkb.org` itself can't be checked this way yet since the UI isn't deployed
-there — nothing is listening on port 13000 on the instance yet (still step 9 below).
 
-## Steps still to do
+9. **Deployed the UI via PM2** on the instance — separate checkout from production's:
+   ```
+   cd ~/sandbox-workspace
+   git clone https://github.com/sensein/brainkb-ui.git
+   cd brainkb-ui
+   cp ../brainkb-infrastructure/sandbox/ui.env.template .env.local
+   sed -i 's/<host>/3.13.122.67/g' .env.local   # instance's public IP, for query_service
+   sed -i 's/^NEXTAUTH_SECRET=$/NEXTAUTH_SECRET=<a real generated secret>/' .env.local
+   PM2_APP_NAME=brainkb-ui-sandbox PORT=13000 bash bin/up-node.sh
+   ```
+   `ui.env.template` already had the real sandbox domains filled in from earlier work —
+   only needed the `<host>` placeholder (for undomained `query_service`/`chat_service`)
+   and a real `NEXTAUTH_SECRET`. Left `NEXT_PUBLIC_JWT_USER`/`PASSWORD` blank — login
+   won't fully work without them, but wasn't blocking this verification. Build succeeded
+   (a few expected cache-warming 403s from the blank JWT creds, and one pre-existing
+   unrelated webpack warning about `rdf-canonize-native` — neither blocks the build).
+   PM2 process `brainkb-ui-sandbox` came up `online` on port 13000, no collision with
+   production's own `brainkb-ui` PM2 process.
+   - **Verified**: `curl -sI https://sandbox.brainkb.org/` → `HTTP/2 200`,
+     `x-powered-by: Next.js` — full chain confirmed working: DNS → ALB (TLS) →
+     target group → PM2.
 
-9. Deploy the UI via PM2 on the EC2 instance (separate checkout from production's,
-   same pattern as the backend), `.env.local` pointing at these real domains instead
-   of localhost.
+**All 3 sandbox domains are now genuinely live and working end-to-end**:
+`sandbox.brainkb.org`, `usermanagement.sandbox.brainkb.org`, `mlservice.sandbox.brainkb.org`.
+
+## Steps still to do (optional, not blocking)
+
 10. Update OAuth app redirect URIs (GitHub/ORCID/Globus) to include
-    `https://usermanagement.sandbox.brainkb.org/api/auth/<provider>/callback` if you
-    want real login to work end-to-end.
+    `https://usermanagement.sandbox.brainkb.org/api/auth/<provider>/callback`, and fill
+    in `NEXT_PUBLIC_JWT_USER`/`PASSWORD` with a real service account, if you want real
+    login to work end-to-end (not done yet — current state proves the deployment
+    pipeline works, not full feature parity).
