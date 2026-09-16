@@ -246,3 +246,43 @@ confirmed working, independent of any of these credentials.
     in `NEXT_PUBLIC_JWT_USER`/`PASSWORD` with a real service account, if you want real
     login to work end-to-end (not done yet — current state proves the deployment
     pipeline works, not full feature parity).
+
+## Turning this into Terraform/OpenTofu later
+
+Everything above was done by hand in the AWS console, on purpose (per the earlier
+"codify what exists before automating" approach). This doc is meant to double as the
+spec for doing it as code later — each numbered step above corresponds fairly directly
+to a resource type:
+
+| What we created                          | Terraform/OpenTofu resource                          |
+|-------------------------------------------|-------------------------------------------------------|
+| ACM certificate (3 domain names)          | `aws_acm_certificate` (+ `aws_acm_certificate_validation`) |
+| Route53 validation CNAME records          | `aws_route53_record` (created automatically by the validation resource, don't hand-write these) |
+| `sandbox-alb-sg` security group           | `aws_security_group`                                   |
+| 3 target groups                           | `aws_lb_target_group` × 3                              |
+| `sandbox-alb`                             | `aws_lb`                                               |
+| HTTPS:443 listener + default action       | `aws_lb_listener`                                      |
+| 2 host-based listener rules                | `aws_lb_listener_rule` × 2                             |
+| 3 Route53 alias records                    | `aws_route53_record` (alias to the `aws_lb`) × 3       |
+| 3 inbound rules on the instance's SG        | `aws_security_group_rule` × 3 (or rules on the existing `launch-wizard-25` SG resource, if that's ever brought under Terraform too) |
+
+Two ways to actually do this, given everything above already exists and is confirmed
+working:
+
+- **Import path**: write the resource blocks to match what's here, then
+  `terraform import` (or OpenTofu's equivalent) each one using the real IDs — VPC
+  `vpc-056bce0f8a2a73bfe`, the ALB/target group ARNs, security group IDs
+  (`sg-02e6912482926898b` for `sandbox-alb-sg`), etc. Keeps the exact resources already
+  tested working, but tedious — one import command per resource, and the `.tf` has to
+  match the live config exactly before Terraform will consider it "clean."
+- **Recreate path**: since sandbox is low-stakes and disposable, tear down what was
+  made manually and `apply` a fresh OpenTofu config instead — genuinely greenfield, no
+  import needed. Given everything here is already proven to work, this is probably the
+  *less* error-prone option, and matches the earlier reasoning for why sandbox (not
+  production) is the right place to learn Terraform/OpenTofu in the first place — low
+  blast radius while getting the config right.
+
+Either way, the EC2 instance itself (`i-02f4d763f21e415f0`) and the `launch-wizard-25`
+security group it already uses are **not** part of this — per the earlier design note,
+compute stays out of Terraform/OpenTofu management; only the ALB/DNS/cert layer around
+it would be codified.
