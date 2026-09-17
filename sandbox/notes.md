@@ -67,11 +67,11 @@ instead of 13000 — fixed once noticed, see commit `68512de`.)
    **validation status: Success**.
 
 5. **Created 3 target groups** (Application Load Balancer type, Instance target type,
-   HTTP), one per backend port, all in `vpc-056bce0f8a2a73bfe`:
+   HTTP), one per backend port, all in `<vpc-id>`:
    - `sandbox-ui-tg` — port 13000
    - `sandbox-usermanagement-tg` — port 18004
    - `sandbox-mlservice-tg` — port 18007
-   All 3 registered the EC2 instance (`i-02f4d763f21e415f0`) as their target — showed
+   All 3 registered the EC2 instance (`<instance-id>`) as their target — showed
    "Unused" health status, expected since no ALB existed yet at that point.
    - Note: found a naming gotcha — AWS target group names don't allow underscores,
      only letters/numbers/hyphens.
@@ -79,14 +79,14 @@ instead of 13000 — fixed once noticed, see commit `68512de`.)
      attached to an ALB named `usermanagement-lb-for-globus` — confirms production's
      one-ALB-per-domain pattern, and that this particular one exists because Globus
      OAuth needs a real HTTPS callback domain.
-6. **Created a dedicated security group** `sandbox-alb-sg` (`sg-02e6912482926898b`) for
+6. **Created a dedicated security group** `sandbox-alb-sg` (`<alb-security-group-id>`) for
    the ALB, rather than reusing the VPC's shared `default` security group (to avoid any
    inbound rule we add here also applying to other resources sharing `default`).
    Inbound: TCP 443 and TCP 80, both from `0.0.0.0/0` (Anywhere-IPv4) — expected/required
    for a public-facing web load balancer, despite AWS's generic "restrict to known IPs"
    warning (that warning is much more relevant to things like SSH than public HTTPS).
    Outbound: left on the default "all traffic" rule.
-7. **Created the ALB**: `sandbox-alb`, Internet-facing, VPC `vpc-056bce0f8a2a73bfe`,
+7. **Created the ALB**: `sandbox-alb`, Internet-facing, VPC `<vpc-id>`,
    2+ AZs, security group `sandbox-alb-sg` (not `default`).
    - Listener: HTTPS : 443, certificate = the one covering all 3 sandbox domains.
    - Pre-routing action: none (no ALB-level auth/JWT validation — usermanagement_service
@@ -121,11 +121,11 @@ instead of 13000 — fixed once noticed, see commit `68512de`.)
      `mlservice.sandbox` (Route53 auto-appends `.brainkb.org` to whatever's typed in
      "Record name" inside this hosted zone — just the subdomain prefix is needed).
    - Verified via `dig`: all 3 domains resolve, and all return the *same* 2 IPs
-     (`3.141.226.221`, `3.139.148.61`) — confirms they're genuinely sharing the one
+     (`<alb-resolved-ip-1>`, `<alb-resolved-ip-2>`) — confirms they're genuinely sharing the one
      ALB, unlike production's separate-ALB-per-domain setup.
 
 8. **Updated the EC2 instance's security group** (`launch-wizard-25` /
-   `sg-00ae856ca219ae663` — found via the instance's own Security Groups page, not the
+   `<instance-security-group-id>` — found via the instance's own Security Groups page, not the
    read-only summary under the instance's Security tab, which doesn't have an edit
    button). Added 3 inbound rules, each with **Source: Custom → `sandbox-alb-sg`**
    (not `0.0.0.0/0`) — so only the ALB can reach these ports, not the whole internet:
@@ -173,7 +173,7 @@ changes needed on the backend side; the ALB/DNS/security-group setup alone did i
    git clone https://github.com/sensein/brainkb-ui.git
    cd brainkb-ui
    cp ../brainkb-infrastructure/sandbox/ui.env.template .env.local
-   sed -i 's/<host>/3.13.122.67/g' .env.local   # instance's public IP, for query_service
+   sed -i 's/<host>/<instance-public-ip>/g' .env.local   # instance's public IP, for query_service
    sed -i 's/^NEXTAUTH_SECRET=$/NEXTAUTH_SECRET=<a real generated secret>/' .env.local
    PM2_APP_NAME=brainkb-ui-sandbox PORT=13000 bash bin/up-node.sh
    ```
@@ -271,8 +271,8 @@ working:
 
 - **Import path**: write the resource blocks to match what's here, then
   `terraform import` (or OpenTofu's equivalent) each one using the real IDs — VPC
-  `vpc-056bce0f8a2a73bfe`, the ALB/target group ARNs, security group IDs
-  (`sg-02e6912482926898b` for `sandbox-alb-sg`), etc. Keeps the exact resources already
+  `<vpc-id>`, the ALB/target group ARNs, security group IDs
+  (`<alb-security-group-id>` for `sandbox-alb-sg`), etc. Keeps the exact resources already
   tested working, but tedious — one import command per resource, and the `.tf` has to
   match the live config exactly before Terraform will consider it "clean."
 - **Recreate path**: since sandbox is low-stakes and disposable, tear down what was
@@ -282,7 +282,7 @@ working:
   production) is the right place to learn Terraform/OpenTofu in the first place — low
   blast radius while getting the config right.
 
-Either way, the EC2 instance itself (`i-02f4d763f21e415f0`) and the `launch-wizard-25`
+Either way, the EC2 instance itself (`<instance-id>`) and the `launch-wizard-25`
 security group it already uses are **not** part of this — per the earlier design note,
 compute stays out of Terraform/OpenTofu management; only the ALB/DNS/cert layer around
 it would be codified.
