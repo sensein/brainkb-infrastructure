@@ -124,6 +124,17 @@ instead of 13000 — fixed once noticed, see commit `68512de`.)
      (`<alb-resolved-ip-1>`, `<alb-resolved-ip-2>`) — confirms they're genuinely sharing the one
      ALB, unlike production's separate-ALB-per-domain setup.
 
+7c. **Added the HTTP:80 listener** (missed initially — the security group already had
+   port 80 open, but no listener existed to actually handle it, so plain
+   `http://` requests hit a dead end even though `https://` worked fine):
+   - `sandbox-alb` → Listeners tab → Add listener → Protocol HTTP, Port 80.
+   - Default action: **"Redirect to URL"** (not "Forward to target groups").
+   - Redirect target: HTTPS, port 443, host/path/query left as `#{host}`/`#{path}`/
+     `#{query}` (preserves the original URL, just switches scheme).
+   - Status code: **301 (permanent redirect)**.
+   - Verified: `curl -sI http://sandbox.brainkb.org/` → `301`, `Location:
+     https://sandbox.brainkb.org:443/`.
+
 8. **Updated the EC2 instance's security group** (`launch-wizard-25` /
    `<instance-security-group-id>` — found via the instance's own Security Groups page, not the
    read-only summary under the instance's Security tab, which doesn't have an edit
@@ -239,13 +250,50 @@ several credentials deliberately left blank. Concretely, this means:
 security groups, the actual services running and responding) — all of that is fully
 confirmed working, independent of any of these credentials.
 
-## Steps still to do (optional, not blocking)
+## Real login: Globus OAuth — done
 
-10. Update OAuth app redirect URIs (GitHub/ORCID/Globus) to include
-    `https://usermanagement.sandbox.brainkb.org/api/auth/<provider>/callback`, and fill
-    in `NEXT_PUBLIC_JWT_USER`/`PASSWORD` with a real service account, if you want real
-    login to work end-to-end (not done yet — current state proves the deployment
-    pipeline works, not full feature parity).
+Decision: **only Globus**, not GitHub/ORCID, for sandbox — Globus is the one that
+actually matters (it's the only provider tied to SuperAdmin bootstrap; accounts must
+be "Globus-verifiable"), and standing up all three just to get login working isn't
+worth it. A **new, sandbox-specific Globus app** was registered (not a reused/shared
+production app — production's existing app is tied to its own registered redirect URL
+and wouldn't work for a different domain anyway).
+
+**Globus app registration** (at `developers.globus.org`): create a **Confidential
+Application** (not a Service Account — confidential clients can hold a secret and
+support the real user-login/redirect flow, which is what "supports REDIRECTS" means
+in practice), under a new project. Redirect URI:
+`https://usermanagement.sandbox.brainkb.org/api/auth/globus/callback`. One nuance:
+app creation only gives you the Client UUID (`GLOBUS_CLIENT_ID`) up front — the actual
+secret needs a separate explicit "Add client secret" step, which then shows both a
+"Secret UUID" (just a label for that secret entry) and the real "Secret Value"
+(`GLOBUS_CLIENT_SECRET`) — don't confuse the two.
+
+**Env var gotcha found and fixed along the way** — two vars were still smoke-test-only
+localhost placeholders (from `backend.env.smoketest.example`) that needed to become
+real domains for OAuth to actually work from an external browser:
+- `USERMANAGEMENT_PUBLIC_BASE_URL` — used by the backend to *construct* the callback
+  URL it sends to the OAuth provider. Left as `http://localhost:18004`, this produced
+  a redirect URI Globus/GitHub would happily accept (matches whatever's registered)
+  but that no external browser could ever reach.
+- `USERMANAGEMENT_FRONTEND_CALLBACK_URL` — used to construct the *final* redirect back
+  to the UI after a successful login (`.../auth/callback?token=...`). Same problem:
+  left as `http://localhost:3080/auth/callback`, the browser tried to load that on the
+  *user's own machine* after Globus auth succeeded, which obviously can't connect.
+Both updated in the instance's `.env`, followed by a backend rebuild/restart to pick
+up the change. General lesson: **any env var that ends up baked into a URL a
+real external browser will be redirected to must be the real public domain, not
+`localhost`** — even if it happens to be paired with a port that's otherwise correct
+internally.
+
+**Verified working end-to-end**: full Globus login flow completes, redirects back to
+`https://sandbox.brainkb.org/auth/callback` with a real issued JWT.
+
+## Still open (optional, not blocking)
+
+- `NEXT_PUBLIC_JWT_USER`/`PASSWORD` (UI's own service-account credentials) are still
+  blank — most data-driven pages will still show empty/error states even with login
+  now working, since that's a separate credential from user login.
 
 ## Turning this into Terraform/OpenTofu later
 
