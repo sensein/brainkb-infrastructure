@@ -3,3 +3,22 @@ production/.env
 sandbox/.env
 *.env.local
 .DS_Store
+
+# OpenTofu / Terraform
+# Note: .terraform.lock.hcl is intentionally NOT ignored — commit it to pin
+# provider versions across the team. Named env tfvars (sandbox.tfvars,
+# production.tfvars) are also expected to be committed; only local override
+# files (terraform.tfvars, *.auto.tfvars) are ignored.
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
