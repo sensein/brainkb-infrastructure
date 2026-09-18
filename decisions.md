@@ -103,21 +103,36 @@ team is ready to pick.
 **Answered (2026-09-16, Tek).** SSH access to the EC2 instance is available
 today.
 
-**Lean.** Use SSH for PyInfra in v1 — matches the current operator workflow,
-no new AWS surface to configure. Two operational items to nail down as v1
-lands:
+**Refined (2026-09-18, implementation spec §20).** SSH is fine for **human
+operators from a laptop**. It is **not** fine to open `:22` to
+`0.0.0.0/0` (or "the internet") so that GitHub Actions can reach the box.
+Treat CI reachability into private infrastructure as an explicit
+architecture decision, not a shortcut to widen an SG rule.
+
+**Lean (v1, sandbox).** Use SSH from operator laptops for PyInfra during
+sandbox bring-up. Two operational items to nail down as v1 lands:
 
 - Which SSH key does PyInfra use? Operator's personal key vs a dedicated
   deploy key stored somewhere durable (1Password, SSM, a GitHub Actions
   secret if CI drives deploys).
-- Which source IPs can reach port 22? Confirm the current SG rule — operator
-  IPs, a bastion, or open — before it becomes a security review finding.
+- Which source IPs can reach port 22 today? Confirm the current SG rule —
+  operator IPs, a bastion, or open — before it becomes a security review
+  finding.
 
-**Follow-up: SSM Session Manager as a hardening step.** Once the SSH key
-story starts hurting (especially when GitHub Actions needs to deploy — see
-§9), SSM Session Manager becomes the simpler answer: no public :22, IAM
-controls access, CloudTrail logs every session. Not blocking; note and
-revisit.
+**Phased plan for CI connectivity (implementation spec §20).** When
+PyInfra needs to run from GitHub Actions, pick one of these — do not just
+widen the :22 rule:
+
+1. **Self-hosted runner inside the VPC.** Simplest network reasoning; the
+   runner has direct access. Costs: running and updating a runner host.
+2. **SSM-based execution.** No public :22, no keys to distribute. IAM
+   controls who can run commands; CloudTrail logs everything. Matches the
+   original §5 lean.
+3. **Controlled bastion / private connectivity.** Traditional; more
+   moving parts than SSM but familiar patterns.
+
+None of these blocks v1 sandbox from operator laptops. Pick one when CI
+actually becomes the driver.
 
 ---
 
@@ -174,6 +189,43 @@ call the script when reconciliation is needed).
 
 **Lean.** PyInfra-facts approach. Don't force cross-repo shell rewrites unless the fact
 approach can't express what we need.
+
+---
+
+## Architecture directions from the implementation spec
+
+Items the September implementation brief calls out as target-state or
+workflow discipline. Not decisions to make now, but not things to forget
+either.
+
+### Private EC2 behind ALB (spec §7)
+
+The target networking model is:
+
+    Internet → IGW → public subnets → ALB → private subnets → EC2 → FSx
+
+Current prod EC2 is public (per `bootstrap.md`). Moving to a private
+subnet is a v2 concern, not a v1 blocker: it interacts with §5 (host
+access path) and §7 in the second-tier list (`query_service` currently on
+direct host:port). Record the direction so v1 doesn't design around a
+public-EC2 assumption we'd have to walk back.
+
+### GitHub workflow concurrency groups (spec §21)
+
+Every deployment workflow must set a concurrency group scoped to its
+environment (e.g. `brainkb-sandbox`, `brainkb-production`) with
+`cancel-in-progress: false`. Prevents two `tofu apply` (or PyInfra) runs
+from racing on the same state file / host. Trivial to add when we write
+the workflows; easy to forget until two deploys collide.
+
+### Separate infra deploys from app deploys (spec §22)
+
+Long-term: a change to `brainkb-infrastructure` runs OpenTofu + PyInfra;
+a change to `brainkb-backend` or `brainkb-ui` runs only PyInfra's
+app-deployment tasks (no `tofu apply` when infra didn't change). v1 can
+use a single workflow that always runs both — the spec explicitly permits
+"one simpler deployment workflow first, then optimize triggers later."
+Splitting is an ergonomic optimization, not a correctness requirement.
 
 ---
 
