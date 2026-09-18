@@ -9,59 +9,51 @@ Convention:
 
 - **Lean** — a recommendation to react to, not yet a decision.
 - **Verify** — information we need to gather before deciding.
+- **Answered** — response received; captures who and when. May settle the
+  question, or reframe it into a follow-up.
 - **Decided** — added once we agree; keep the reasoning above it.
 
 ---
 
 ## 1. FSx flavor for Oxigraph persistence
 
-**Question.** Prod uses FSx with an S3 data-repository association (`bootstrap.md`).
-Which FSx flavor is it, and is that the right choice for Oxigraph going forward?
+**Answered (2026-09-16, Tek).** Prod uses **FSx for Lustre** with an S3
+data-repository association. That's the current baseline; codify it in v1.
 
-**Options.**
-
-- FSx for **Lustre** — HPC-oriented, expensive, POSIX-quirky, aggressive semantics on the
-  S3 data-repository association (lazy load, export policies). Overkill for a SPARQL store.
-- FSx for **OpenZFS** — POSIX-native, native snapshots, no S3 association (S3 sync becomes
-  an application concern, not a filesystem one). Simpler mental model.
-- **EFS** — POSIX-native, elastic, cheap infrequent-access tier. No data-repository
-  semantics to trip on; S3 export is whatever we build.
-
-**Lean.** Move off Lustre if that's what prod is currently on. EFS + an explicit
-`oxigraph dump → S3` schedule (see §2) is likely the right shape given Oxigraph's I/O
-profile — no HPC pattern, single-writer, occasional large reads.
-
-**Verify.**
-
-- Which FSx flavor is prod actually on? (`FSx → Filesystems → summary`.)
-- Current monthly cost line for FSx. Baseline to compare against.
-- Is the S3 data-repository association doing anything the app actually relies on today,
-  or is it "on because it came with the wizard"?
+**Residual follow-up (not blocking v1).** Whether to migrate off Lustre later
+for cost/complexity reasons — Lustre is HPC-shaped and Oxigraph's I/O profile
+is not. Revisit once the tofu module for Lustre is in and we have real cost
+data. If we ever migrate, EFS or FSx for OpenZFS are the plausible targets.
 
 ---
 
 ## 2. Backup semantics for the graph store
 
-**Question.** FSx↔S3 sync is filesystem replication, not an application-consistent backup.
-Oxigraph writing mid-sync could leave the S3 side in an unrestorable state. What is the
-real backup story?
+**Answered (2026-09-16, Tek).** The FSx-to-S3 mirror **is** the backup story
+— prod already has one configured, and recovery is via S3. Details are in a
+Slack thread; not yet captured in this repo. No separate `oxigraph dump` job
+is planned.
 
-**Options.**
+**Follow-up: capture from Slack.** The backup configuration currently lives
+only in Slack. Port the concrete details (bucket name, sync direction,
+retention/versioning settings, restore procedure) into `bootstrap.md` so it
+survives Slack retention and stops being tribal knowledge.
 
-- Periodic `oxigraph dump` (or a SPARQL `CONSTRUCT WHERE {?s ?p ?o}` export) to a
-  versioned S3 bucket in a different region. Restore = load the dump into a fresh
-  Oxigraph. Simple, correct, works regardless of FSx choice.
-- FSx-level snapshots (OpenZFS supports this natively; Lustre does not).
-- Do nothing (accept data-loss risk). Not viable for production.
+**Residual risk to name, not a blocker.** FSx↔S3 mirror is filesystem
+replication, not an application-consistent backup. It covers:
 
-**Lean.** Daily `oxigraph dump` → versioned S3 bucket, 30 days retention, cross-region.
-Add as a systemd timer via PyInfra. Independent of whichever FSx flavor §1 lands on.
+- EC2 disk loss / instance failure / region-scoped recovery.
 
-**Verify.**
+It does **not** cover:
 
-- Current graph size on disk. Determines dump time and whether daily is feasible.
-- What RPO/RTO are we actually willing to accept? A working assumption of RPO ≤ 24h,
-  RTO ≤ 1h feels right for BrainKB's usage but should be stated, not assumed.
+- Application-level corruption (Oxigraph mid-write when something goes
+  wrong on the host).
+- Accidental logical deletes (a bad `SPARQL DELETE`, a wrong migration).
+- Ransomware or operator error propagating to S3 before it's noticed.
+
+Recording this so accepting it is a conscious choice. If those failure
+modes turn out to matter later, a periodic `oxigraph dump` to a separate
+versioned bucket is the cheap add-on.
 
 ---
 
@@ -91,50 +83,41 @@ isolation boundary today, and it works.
 
 ## 4. Ollama and GPU
 
-**Question.** `BrainKB/start_services.sh` runs Ollama outside compose via `docker run`
-with GPU auto-detect. Is prod GPU-equipped? Is Ollama actively used in prod today?
+**Answered (2026-09-16, Tek).** Prod runs Ollama on **CPU** — no GPU
+instance. There's an open consideration to move to **AWS Bedrock** (or
+another cheap managed provider) since BrainKB isn't deploying large models.
 
-**Options.**
+**Lean.** v1 codifies the current state — CPU-only Ollama, non-GPU EC2
+instance family. Treat the managed-API migration as a separate follow-up
+change once the provider decision is made; don't scope it into v1.
 
-- **GPU in prod** (e.g. `g4dn.xlarge`, `g5.xlarge`). NVIDIA driver + container toolkit go
-  in the base AMI or in PyInfra. Ollama runs with `--gpus all`. Cost step-up is real.
-- **CPU only.** Cheaper instance; Ollama runs CPU-only (much slower for real models).
-- **No Ollama in prod at all.** Simplest. Drop from the deployment plan, mirror
-  `chat_service`'s "confirmed not deployed" status.
-
-**Lean.** Confirm current state first — this is a factual question, not a design one. If
-Ollama is running in prod today, keep it and codify. If not, defer with a clear note.
-
-**Verify.**
-
-- Current EC2 instance family (per `bootstrap.md` TODO — check `EC2 → Instances`).
-- Does prod's `.env` set Ollama-related URLs to a real endpoint, or `localhost` /
-  blank / a stale value?
-- Ask Tek: is Ollama actively used, or dormant like `chat_service`?
+**Reframed question for later.** Self-hosted CPU Ollama vs Bedrock vs a
+cheaper managed provider — cost, latency, model availability, and
+data-egress considerations. Worth its own short comparison doc when the
+team is ready to pick.
 
 ---
 
 ## 5. Host access path: SSH vs SSM Session Manager
 
-**Question.** PyInfra needs to reach the EC2 host. Which access path do we standardize on?
+**Answered (2026-09-16, Tek).** SSH access to the EC2 instance is available
+today.
 
-**Options.**
+**Lean.** Use SSH for PyInfra in v1 — matches the current operator workflow,
+no new AWS surface to configure. Two operational items to nail down as v1
+lands:
 
-- **Plain SSH on port 22.** SG must allow inbound 22 from somewhere (a bastion, operator
-  IPs, or worse — the world). SSH key management becomes a real operational concern,
-  especially from CI.
-- **SSM Session Manager.** No public 22, no SSH keys. IAM controls who can connect. Every
-  session is logged in CloudTrail. PyInfra can use it via
-  `ssh -o ProxyCommand='aws ssm start-session ...'` or a dedicated SSM connector.
+- Which SSH key does PyInfra use? Operator's personal key vs a dedicated
+  deploy key stored somewhere durable (1Password, SSM, a GitHub Actions
+  secret if CI drives deploys).
+- Which source IPs can reach port 22? Confirm the current SG rule — operator
+  IPs, a bastion, or open — before it becomes a security review finding.
 
-**Lean.** SSM Session Manager. Zero-inbound-22 SG, no keys to manage, free audit logs,
-works identically from a laptop and from GitHub Actions.
-
-**Verify.**
-
-- Is the current EC2 already SSM-managed (instance role has
-  `AmazonSSMManagedInstanceCore`)? If yes, this is a one-line SG change.
-- Any operator preference against SSM we should know about?
+**Follow-up: SSM Session Manager as a hardening step.** Once the SSH key
+story starts hurting (especially when GitHub Actions needs to deploy — see
+§9), SSM Session Manager becomes the simpler answer: no public :22, IAM
+controls access, CloudTrail logs every session. Not blocking; note and
+revisit.
 
 ---
 
