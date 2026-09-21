@@ -27,14 +27,18 @@ Snapshot of the AWS resources BrainKB production runs on, as of
 
 ### Subnets
 
-- **Production EC2 sits in**: `subnet-04b630da6d9b3674c` (us-east-2a),
-  public — the instance has a public IP.
-- **All other subnets in this VPC**: *TBD.* Needed for multi-AZ ALB
-  setup. Command:
+Three subnets, one per AZ, all public (`MapPublicIpOnLaunch=true`) —
+standard default-VPC layout.
 
-      aws ec2 describe-subnets \
-          --filters Name=vpc-id,Values=vpc-056bce0f8a2a73bfe \
-          --region us-east-2
+| Subnet ID | AZ | CIDR | Public |
+|---|---|---|---|
+| `subnet-04b630da6d9b3674c` | us-east-2a | 172.31.0.0/20 | yes |
+| `subnet-0d82ab2916c10c979` | us-east-2b | 172.31.16.0/20 | yes |
+| `subnet-01126225d35c86c11` | us-east-2c | 172.31.32.0/20 | yes |
+
+Production EC2 sits in `subnet-04b630da6d9b3674c` (us-east-2a).
+
+Sandbox ALB will span all three so it's multi-AZ resilient by default.
 
 ## EC2 instance
 
@@ -205,16 +209,14 @@ themselves.
 
 ## Data gaps
 
-In priority order for what unblocks the next work:
+In priority order:
 
-1. **Other subnets in `vpc-056bce0f8a2a73bfe`** — blocks sandbox ALB
-   (needs 2+ AZs).
-2. **ALB inventory** — needed for prod-import (Phase 10), not sandbox
+1. **ALB inventory** — needed for prod-import (Phase 10), not sandbox
    greenfield.
-3. **FSx filesystem details** — needed for Phase 5 storage
+2. **FSx filesystem details** — needed for Phase 5 storage
    codification.
-4. **Sandbox SG attachment** — clarifies sandbox's current state.
-5. **S3 bucket inventory** — the FSx-linked bucket, plus any others.
+3. **Sandbox SG attachment** — clarifies sandbox's current state.
+4. **S3 bucket inventory** — the FSx-linked bucket, plus any others.
 
 ## Provenance
 
@@ -223,6 +225,7 @@ through 2026-09-21 in AWS CloudShell, us-east-2:
 
 - `ec2 describe-instances --instance-ids i-02f4d763f21e415f0`
 - `ec2 describe-security-groups --group-ids sg-00ae856ca219ae663`
+- `ec2 describe-subnets --filters Name=vpc-id,Values=vpc-056bce0f8a2a73bfe`
 - `route53 list-hosted-zones`
 
 Re-run any of them to refresh; this file is a point-in-time snapshot,
