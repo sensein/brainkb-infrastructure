@@ -29,3 +29,35 @@ hosted_zone_id = "Z06918342ADZVPCW09HXW"
 # ssh_allowed_cidrs intentionally not set here — do it locally, via
 # sandbox.auto.tfvars (gitignored) or TF_VAR_ssh_allowed_cidrs. See
 # README.
+
+# Sandbox ALB routing. Ports match the sandbox +10000 convention;
+# hostnames mirror the sandbox/notes.md target. Health check paths are
+# "/" for the UI (Next.js will 200 on root) and TBD once each backend
+# service confirms its /health endpoint — leaving as "/" (matches all
+# non-empty responses of 200-299).
+alb_targets = [
+  {
+    name              = "ui"
+    hostname          = "sandbox.brainkb.org"
+    port              = 13000
+    health_check_path = "/"
+  },
+  {
+    name              = "usermgmt"
+    hostname          = "usermanagement.sandbox.brainkb.org"
+    port              = 18004
+    health_check_path = "/"
+  },
+  {
+    name              = "mlservice"
+    hostname          = "mlservice.sandbox.brainkb.org"
+    port              = 18007
+    health_check_path = "/"
+  },
+]
+
+# sandbox.brainkb.org already has a stale A record pointing at
+# 192.2.0.233 (per sandbox/notes.md). This flag lets tofu replace it
+# with the ALB ALIAS. NEVER set true in production — production
+# records should be imported into state before apply.
+dns_allow_overwrite = true

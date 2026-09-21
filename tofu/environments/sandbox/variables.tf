@@ -35,3 +35,19 @@ variable "hosted_zone_id" {
   description = "Route 53 hosted zone ID for brainkb.org. Value in sandbox.tfvars."
   type        = string
 }
+
+variable "alb_targets" {
+  description = "ALB routing targets — see the brainkb module's alb_targets variable. Set in sandbox.tfvars."
+  type = list(object({
+    name              = string
+    hostname          = string
+    port              = number
+    health_check_path = optional(string, "/")
+  }))
+}
+
+variable "dns_allow_overwrite" {
+  description = "If true, Route 53 records may replace existing records with the same name+type. True in sandbox to handle the stale sandbox.brainkb.org A record (see sandbox/notes.md)."
+  type        = bool
+  default     = false
+}
