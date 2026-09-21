@@ -15,5 +15,8 @@ module "brainkb" {
   ui_port      = 13000
   backend_port = 18000
 
+  alb_targets         = var.alb_targets
+  dns_allow_overwrite = var.dns_allow_overwrite
+
   protect_persistent_data = false
 }

@@ -80,3 +80,30 @@ variable "protect_persistent_data" {
   type        = bool
   default     = false
 }
+
+variable "alb_targets" {
+  description = "ALB routing targets. Each entry creates a target group + HTTPS listener rule that forwards its hostname to the given port on the EC2 host. At least one entry is required."
+  type = list(object({
+    name              = string
+    hostname          = string
+    port              = number
+    health_check_path = optional(string, "/")
+  }))
+
+  validation {
+    condition     = length(var.alb_targets) >= 1
+    error_message = "At least one alb_targets entry is required."
+  }
+}
+
+variable "acm_certificate_arn" {
+  description = "ARN of an existing ACM certificate covering all alb_targets hostnames. If null (default), the module creates one and DNS-validates it via Route 53."
+  type        = string
+  default     = null
+}
+
+variable "dns_allow_overwrite" {
+  description = "If true, Route 53 records may replace existing records with the same name+type. Appropriate for sandbox where a known-stale record exists (see sandbox/notes.md); never set true for production — import existing records instead."
+  type        = bool
+  default     = false
+}

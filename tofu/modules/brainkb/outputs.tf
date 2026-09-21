@@ -23,6 +23,36 @@ output "iam_role_name" {
   value       = aws_iam_role.app.name
 }
 
+output "alb_dns_name" {
+  description = "ALB's public DNS name — useful for testing before Route 53 records propagate."
+  value       = aws_lb.app.dns_name
+}
+
+output "alb_zone_id" {
+  description = "Route 53 zone ID of the ALB itself (not the hosted zone). Needed to construct additional ALIAS records that point here."
+  value       = aws_lb.app.zone_id
+}
+
+output "alb_arn" {
+  description = "ARN of the ALB."
+  value       = aws_lb.app.arn
+}
+
+output "alb_security_group_id" {
+  description = "ALB security group ID."
+  value       = aws_security_group.alb.id
+}
+
+output "acm_certificate_arn" {
+  description = "ARN of the ACM certificate the ALB uses — either the module-managed one or the caller-supplied one."
+  value       = local.certificate_arn
+}
+
+output "app_hostnames" {
+  description = "Hostnames that route to the app via the ALB."
+  value       = [for t in var.alb_targets : t.hostname]
+}
+
 # Structured output for the OpenTofu → PyInfra contract
 # (implementation spec §11). The adapter reads this block via
 # `tofu output -json pyinfra`.

@@ -12,25 +12,54 @@ OpenTofu configuration for the BrainKB sandbox environment.
    `s3://sensein-brainkb-tofu-state/brainkb/sandbox/tofu.tfstate`,
    locked via the DynamoDB table created there.
 
-## What this creates (v1 slice — compute only)
+## What this creates
 
-- **No new VPC/subnets** — reuses the account's default VPC and its
-  three public subnets in us-east-2 (see `discovery.md`).
-- **`brainkb-sandbox-app` security group** — empty ingress by default
-  (SSM Session Manager is the intended access path). SSH ingress is
-  added only when you supply `ssh_allowed_cidrs`; `0.0.0.0/0` is
-  explicitly rejected by a validation rule.
-- **`brainkb-sandbox-app` IAM role + instance profile** with
-  `AmazonSSMManagedInstanceCore` attached — lets you connect via
-  SSM Session Manager without opening SSH.
-- **`brainkb-sandbox` EC2 instance** — `t3.medium`, Ubuntu 22.04 LTS
-  (auto-selected latest Canonical AMI), IMDSv2 required, 30 GB gp3
+Compute + ALB + DNS. Split by concern:
+
+**Network reuse** — no new VPC/subnets. Uses the account's default VPC
+and its three public subnets in us-east-2 (see `discovery.md`).
+
+**Compute**
+
+- `brainkb-sandbox-app` security group — no ingress by default. SSH
+  ingress rules are added only when you supply `ssh_allowed_cidrs`;
+  `0.0.0.0/0` is rejected by a validation rule. App-port ingress comes
+  from the ALB SG (below), not `0.0.0.0/0`.
+- `brainkb-sandbox-app` IAM role + instance profile with
+  `AmazonSSMManagedInstanceCore` attached — lets you connect via SSM
+  Session Manager without opening SSH.
+- `brainkb-sandbox` EC2 instance — `t3.medium`, Ubuntu 22.04 LTS
+  (auto-picks latest Canonical AMI), IMDSv2 required, 30 GB gp3
   encrypted root. Placed in `subnet-04b630da6d9b3674c` (us-east-2a).
 
-**Not yet in this slice** (each will be its own PR):
+**ALB + routing**
 
-- ALB, target groups, listener rules
-- Route 53 records for `sandbox.brainkb.org` etc.
+- `brainkb-sandbox-alb` security group — public 80/443 in; egress to
+  the app SG on each target port only.
+- `brainkb-sandbox-alb` — public Application Load Balancer, spans all
+  three subnets (multi-AZ resilient by default).
+- One target group per service (`brainkb-sandbox-ui`,
+  `brainkb-sandbox-usermgmt`, `brainkb-sandbox-mlservice`), each with
+  a `GET /` health check (matcher 200-299).
+- HTTPS :443 listener with TLS 1.3 and a fixed-404 default action —
+  unmatched hostnames don't accidentally route somewhere.
+- One host-based listener rule per hostname; priorities start at 100.
+- HTTP :80 listener that permanently redirects (301) to HTTPS.
+
+**TLS + DNS**
+
+- ACM certificate covering all three sandbox hostnames, DNS-validated
+  through Route 53 automatically.
+- A-ALIAS records in `brainkb.org` (zone `Z0691…`, per `discovery.md`)
+  for `sandbox.brainkb.org`, `usermanagement.sandbox.brainkb.org`,
+  and `mlservice.sandbox.brainkb.org`, pointing at the ALB.
+- `dns_allow_overwrite = true` — sandbox has a stale
+  `sandbox.brainkb.org` A record from an earlier attempt (per
+  `sandbox/notes.md`); this flag lets tofu replace it in place. Never
+  set true for production.
+
+**Not yet in this environment** (each will be its own PR):
+
 - FSx for Lustre + S3 (sandbox uses a plain Docker volume for now)
 - PyInfra host configuration (Phase 4+ from the implementation spec)
 
@@ -84,7 +113,19 @@ After apply, useful commands:
 
     tofu output instance_id
     tofu output instance_public_ip
+    tofu output alb_dns_name
+    tofu output app_hostnames
     tofu output -json pyinfra    # structured, for the PyInfra adapter
+
+## Testing without waiting for DNS
+
+Route 53 records propagate in seconds usually, but you can hit the ALB
+directly before that by supplying the Host header:
+
+    curl -k -H "Host: sandbox.brainkb.org" "https://$(tofu output -raw alb_dns_name)/"
+
+`-k` skips TLS verification because the cert is for the sandbox
+hostname, not the ALB's own AWS-generated name.
 
 ## Destroy
 
@@ -104,3 +145,14 @@ to `true`.
 - **Session Manager says "Not Registered".** The instance needs to
   finish first-boot registration with SSM (a minute or two after
   `tofu apply` completes). Also verify the region is `us-east-2`.
+- **`tofu apply` hangs on the ACM cert.** DNS validation waits for
+  the CNAME records to propagate and ACM to re-check. Usually a
+  minute or two; can be up to five. Don't cancel — the next resource
+  in the plan needs the validated cert.
+- **`tofu apply` errors on target-group name length.** Target group
+  names are `brainkb-sandbox-<name>` and AWS caps them at 32
+  characters — keep each `alb_targets[*].name` under 16 chars.
+- **Target group health checks fail.** Expected until the backend
+  services are actually running on the EC2 (PyInfra slice, not yet
+  implemented). The ALB creates fine; only the target-health readouts
+  in the AWS console will be red until then.

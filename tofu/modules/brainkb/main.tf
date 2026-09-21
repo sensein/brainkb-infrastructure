@@ -18,6 +18,10 @@ locals {
   name   = "brainkb-${var.environment}"
   ami_id = var.ami_id != null ? var.ami_id : data.aws_ami.ubuntu[0].id
 
+  # Cert ARN used by the HTTPS listener: caller-supplied when provided,
+  # otherwise the one this module created and validated in dns.tf.
+  certificate_arn = var.acm_certificate_arn != null ? var.acm_certificate_arn : aws_acm_certificate_validation.app[0].certificate_arn
+
   tags = {
     Environment = var.environment
     ManagedBy   = "opentofu"
