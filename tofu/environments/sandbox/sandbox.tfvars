@@ -61,3 +61,11 @@ alb_targets = [
 # with the ALB ALIAS. NEVER set true in production — production
 # records should be imported into state before apply.
 dns_allow_overwrite = true
+
+# Sandbox does not create FSx by default — bootstrap.md notes it's
+# not needed for sandbox use, and Oxigraph will fall back to a Docker
+# named volume when enable_fsx is false. Flipping to true adds an
+# ~$100+/month Lustre bill; only worth it if we want sandbox to
+# mirror production storage-wise (e.g., testing FSx-related PyInfra
+# behavior before rolling it into prod).
+enable_fsx = false

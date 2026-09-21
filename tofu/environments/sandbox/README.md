@@ -58,10 +58,33 @@ and its three public subnets in us-east-2 (see `discovery.md`).
   `sandbox/notes.md`); this flag lets tofu replace it in place. Never
   set true for production.
 
-**Not yet in this environment** (each will be its own PR):
+**Storage — deliberately off by default in sandbox**
 
-- FSx for Lustre + S3 (sandbox uses a plain Docker volume for now)
-- PyInfra host configuration (Phase 4+ from the implementation spec)
+- `enable_fsx = false` in `sandbox.tfvars`. No FSx filesystem, no S3
+  data bucket. Oxigraph will use a plain Docker named volume on the
+  EC2's EBS root, per `bootstrap.md` §Oxigraph.
+- The module code for FSx + S3 exists (`storage.tf`) — flipping
+  `enable_fsx = true` provisions:
+  - S3 bucket `sensein-brainkb-sandbox-data` (versioned, encrypted,
+    private) with `prevent_destroy` guarded by
+    `protect_persistent_data`.
+  - FSx SG allowing Lustre client protocol (988, 1018-1023) from the
+    app SG only.
+  - FSx for Lustre filesystem — `SCRATCH_2` by default (cheaper,
+    single-AZ; production would flip to `PERSISTENT_2`), 1.2 TB, LZ4
+    compression, in the same subnet as the EC2.
+  - FSx ↔ S3 data-repository association with **conservative
+    deletion policy** — imports/exports on NEW+CHANGED events only,
+    not DELETED (per `decisions.md` §2).
+- Cost signal: enabling FSx adds ~$100+/month for Lustre alone. Only
+  worth it when we specifically want to test FSx-related PyInfra
+  behavior before it goes into prod.
+
+**Not yet in this environment** (own PRs, in order):
+
+- PyInfra host configuration (Phase 4+)
+- PyInfra app deployment (Phase 6-7)
+- GitHub Actions automation (Phase 9)
 
 ## How to run
 

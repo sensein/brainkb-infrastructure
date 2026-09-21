@@ -51,3 +51,9 @@ variable "dns_allow_overwrite" {
   type        = bool
   default     = false
 }
+
+variable "enable_fsx" {
+  description = "If true, sandbox provisions FSx for Lustre + a linked S3 bucket. Defaults to false — sandbox uses a Docker named volume per bootstrap.md."
+  type        = bool
+  default     = false
+}

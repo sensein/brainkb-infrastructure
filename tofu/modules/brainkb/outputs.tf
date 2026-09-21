@@ -53,9 +53,25 @@ output "app_hostnames" {
   value       = [for t in var.alb_targets : t.hostname]
 }
 
+output "fsx_dns_name" {
+  description = "FSx for Lustre DNS name — null when enable_fsx is false."
+  value       = var.enable_fsx ? aws_fsx_lustre_file_system.data[0].dns_name : null
+}
+
+output "fsx_mount_name" {
+  description = "FSx for Lustre mount name — null when enable_fsx is false."
+  value       = var.enable_fsx ? aws_fsx_lustre_file_system.data[0].mount_name : null
+}
+
+output "data_bucket_name" {
+  description = "S3 data-bucket name backing FSx — null when enable_fsx is false."
+  value       = var.enable_fsx ? aws_s3_bucket.data[0].id : null
+}
+
 # Structured output for the OpenTofu → PyInfra contract
 # (implementation spec §11). The adapter reads this block via
-# `tofu output -json pyinfra`.
+# `tofu output -json pyinfra`. fsx_* fields are null when FSx isn't
+# provisioned so the adapter can fall back to a Docker named volume.
 output "pyinfra" {
   description = "Structured inventory intended for the PyInfra adapter (spec §11)."
   value = {
@@ -69,8 +85,7 @@ output "pyinfra" {
     ui_port      = var.ui_port
     backend_port = var.backend_port
 
-    # fsx_dns_name and fsx_mount_name are added by the Phase 5 storage
-    # slice; they're absent here rather than null so the adapter can
-    # unambiguously detect "storage not configured yet".
+    fsx_dns_name   = var.enable_fsx ? aws_fsx_lustre_file_system.data[0].dns_name : null
+    fsx_mount_name = var.enable_fsx ? aws_fsx_lustre_file_system.data[0].mount_name : null
   }
 }

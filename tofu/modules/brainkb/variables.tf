@@ -107,3 +107,61 @@ variable "dns_allow_overwrite" {
   type        = bool
   default     = false
 }
+
+variable "enable_fsx" {
+  description = "If true, provision FSx for Lustre + a linked S3 data-repo bucket. Sandbox defaults to false (Oxigraph uses a Docker named volume per bootstrap.md); production sets true."
+  type        = bool
+  default     = false
+}
+
+variable "fsx_storage_capacity_gb" {
+  description = "FSx for Lustre storage capacity in GB. AWS minimums: SCRATCH_2 and PERSISTENT_2 both start at 1200."
+  type        = number
+  default     = 1200
+}
+
+variable "fsx_deployment_type" {
+  description = "FSx for Lustre deployment type. SCRATCH_2 (cheaper, single-AZ, temporary storage) for sandbox testing; PERSISTENT_2 (multi-AZ, backups) for production."
+  type        = string
+  default     = "SCRATCH_2"
+
+  validation {
+    condition     = contains(["SCRATCH_2", "PERSISTENT_1", "PERSISTENT_2"], var.fsx_deployment_type)
+    error_message = "fsx_deployment_type must be SCRATCH_2, PERSISTENT_1, or PERSISTENT_2."
+  }
+}
+
+variable "fsx_throughput_per_unit_storage" {
+  description = "Throughput in MB/s per TiB. Applies to PERSISTENT_* only; ignored for SCRATCH_2. Minimum 125 for PERSISTENT_2."
+  type        = number
+  default     = 125
+}
+
+variable "fsx_data_compression" {
+  description = "FSx data compression type. NONE or LZ4."
+  type        = string
+  default     = "LZ4"
+
+  validation {
+    condition     = contains(["NONE", "LZ4"], var.fsx_data_compression)
+    error_message = "fsx_data_compression must be NONE or LZ4."
+  }
+}
+
+variable "fsx_s3_import_events" {
+  description = "S3 events that trigger FSx import (S3 → FSx). Conservative default omits DELETED — a delete on S3 does not silently wipe the FSx side, per decisions.md §2."
+  type        = list(string)
+  default     = ["NEW", "CHANGED"]
+}
+
+variable "fsx_s3_export_events" {
+  description = "FSx events that trigger S3 export (FSx → S3). Conservative default omits DELETED — a bad SPARQL DELETE or migration does not silently wipe the S3 mirror."
+  type        = list(string)
+  default     = ["NEW", "CHANGED"]
+}
+
+variable "data_bucket_name" {
+  description = "Explicit S3 data-bucket name. If null, defaults to \"sensein-<local.name>-data\". Must be globally unique across S3."
+  type        = string
+  default     = null
+}
