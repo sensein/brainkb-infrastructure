@@ -1,7 +1,7 @@
 # Open decisions: OpenTofu + PyInfra adoption
 
 Open questions that must be answered before we start writing `.tf` or `pyinfra` code.
-See `README.md`, `bootstrap.md`, and `notes.md` for what exists today; the September 2026
+See `README.md`, `bootstrap.md`, and `sandbox/notes.md` for what exists today; the September 2026
 architecture summary (OpenTofu + PyInfra) for the target shape. This file is a decisions
 log — nothing here is final until we mark it so.
 
@@ -142,7 +142,7 @@ Can wait past v1 sandbox; must resolve before prod cutover.
 
 ### 6. Prod ALB migration: 3 → 1
 
-Prod has 3 ALBs today (per `notes.md`, dig-verified). Sandbox is being built as 1 ALB with
+Prod has 3 ALBs today (per `sandbox/notes.md`, dig-verified). Sandbox is being built as 1 ALB with
 host-based routing. Migrating prod is a live DNS cutover, not a `tofu import`. It needs
 its own runbook: TTL reduction ahead of time, per-domain flip, rollback plan, target-group
 draining.
