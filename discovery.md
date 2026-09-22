@@ -112,7 +112,7 @@ Both public hosted zones in this account:
 
 | Zone | Zone ID | Records | Notes |
 |---|---|---|---|
-| `brainkb.org.` | `Z06918342ADZVPCW09HXW` | 25 | The one we manage; holds the 4 confirmed-live subdomains from `bootstrap.md` (`beta.`, `usermanagement.`, `mlservice.`, `mcp.`) plus ACM validation records and the stale `sandbox.brainkb.org` A record noted in `sandbox/notes.md`. |
+| `brainkb.org.` | `Z06918342ADZVPCW09HXW` | 25 | The one we manage; holds the 4 confirmed-live production subdomains from `bootstrap.md` (`beta.`, `usermanagement.`, `mlservice.`, `mcp.`), ACM validation records, and the `sandbox.brainkb.org` alias pointing at `sandbox-alb` (edited from an earlier stale A record — see `sandbox/notes.md` step 7b). |
 | `bican-kb.com.` | `Z05781153K6JB7XXSHR1O` | 4 | Related BICAN project domain; not part of this BrainKB inventory. |
 
 ## Storage — FSx + S3
