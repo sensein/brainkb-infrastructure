@@ -36,6 +36,7 @@ belongs to which environment on the shared EC2 instance.
 | Oxigraph             |       7878 |   17878 |
 | pgAdmin              |       5051 |   15051 |
 | Postgres             |       5432 |   15432 |
+| MCP server           |       8080 |   18080 |
 
 (The UI port briefly broke this rule during early ad-hoc local testing — used 3080
 instead of 13000 — fixed once noticed, see commit `68512de`.)
@@ -289,6 +290,64 @@ internally.
 **Verified working end-to-end**: full Globus login flow completes, redirects back to
 `https://sandbox.brainkb.org/auth/callback` with a real issued JWT.
 
+## MCP server (`brainkb-mcp` / `mcp.sandbox.brainkb.org`) — done
+
+Separate repo (`sensein/brainkb_mcp`), separate deployment mechanism from the main
+backend — its own `docker-compose.yml`/Dockerfile, not folded into this repo's
+`sandbox/docker-compose.yml` (same reasoning as why the UI isn't in there either: an
+independently-maintained component with its own release cycle, kept as its own
+checkout + its own compose file, documented here rather than merged in).
+
+**Host side**: cloned into `~/sandbox-workspace/brainkb_mcp` on the instance. `.env`:
+- `BRAINKB_URL=http://host.docker.internal:18010` (sandbox's `query_service`)
+- `USERMANAGEMENT_URL=http://host.docker.internal:18004` (sandbox's `usermanagement_service`)
+- `MCP_BIND_ADDR=0.0.0.0` (default is loopback-only; an ALB can't reach that)
+- `MCP_TRUSTED_PROXIES=<subnet-cidr-1>,<subnet-cidr-2>` — `sandbox-alb`'s own subnet
+  CIDRs, found via:
+  ```
+  aws ec2 describe-subnets --query 'Subnets[].CidrBlock' --output text \
+    --subnet-ids $(aws elbv2 describe-load-balancers --names sandbox-alb \
+      --query 'LoadBalancers[0].AvailabilityZones[].SubnetId' --output text)
+  ```
+- A local `docker-compose.override.yml` (untracked, doesn't touch the upstream repo's
+  own compose file) remaps the host port to `18080` — production's own `brainkb-mcp`
+  already owns host port 8080 on this same shared instance:
+  ```yaml
+  services:
+    brainkb-mcp:
+      ports:
+        - "${MCP_BIND_ADDR:-127.0.0.1}:18080:8080"
+  ```
+
+**AWS side** — same pattern as the main backend's ALB setup above, one more time:
+- Security group rule: port `18080`, source `sandbox-alb-sg` (not `0.0.0.0/0` —
+  this endpoint is meant to be reached only through the ALB).
+- Target group `sandbox-mcp-tg`: Instance type, port `18080`, health check path
+  `/healthz` (deliberately liveness-only — doesn't probe the backend, per the repo's
+  own README).
+- **A separate ACM certificate**, just for `mcp.sandbox.brainkb.org`, added as an
+  *additional* certificate on the same HTTPS:443 listener (ALB listeners support
+  multiple certs via SNI; the original 3-domain cert stays as the default). This was
+  a choice, not a hard requirement — `mcp.sandbox.brainkb.org` **could** have been
+  folded into one 4-domain certificate instead, by requesting a brand-new cert with
+  all 4 names as SANs and swapping it in as the listener's default, replacing the
+  original. That would mean re-validating all 4 domains at once and a listener
+  cutover for the 3 already-working ones. Went with a second independent cert
+  instead — smaller blast radius, doesn't touch anything already working. Either
+  approach is valid; this just optimized for not disturbing what's already live.
+- A 4th host-based listener rule: host header `mcp.sandbox.brainkb.org` → forward to
+  `sandbox-mcp-tg`.
+- A 4th Route53 alias record: `mcp.sandbox` → `sandbox-alb`.
+
+**Verified working end-to-end**: `curl -sI https://mcp.sandbox.brainkb.org/` → `200`;
+`curl https://mcp.sandbox.brainkb.org/healthz` → `ok`.
+
+**Not done (optional)**: the repo's README recommends raising the ALB's idle timeout
+to ~300s for MCP's long-lived streaming responses. This is an ALB-wide attribute
+(affects all 4 services' listeners, not just MCP's rule) — skipped for now since
+basic testing works fine without it; worth doing if streaming responses ever get
+cut off mid-stream.
+
 ## Still open (optional, not blocking)
 
 - `NEXT_PUBLIC_JWT_USER`/`PASSWORD` (UI's own service-account credentials) are still
@@ -313,6 +372,11 @@ to a resource type:
 | 2 host-based listener rules                | `aws_lb_listener_rule` × 2                             |
 | 3 Route53 alias records                    | `aws_route53_record` (alias to the `aws_lb`) × 3       |
 | 3 inbound rules on the instance's SG        | `aws_security_group_rule` × 3 (or rules on the existing `launch-wizard-25` SG resource, if that's ever brought under Terraform too) |
+| Second ACM certificate (`mcp.sandbox.brainkb.org`) | `aws_acm_certificate` (+ validation) — a separate resource by choice, not necessity; could instead be one 4-SAN cert replacing the first (see MCP section above for the tradeoff) |
+| `sandbox-mcp-tg` target group               | `aws_lb_target_group`                                  |
+| 4th host-based listener rule                | `aws_lb_listener_rule`                                 |
+| 4th Route53 alias record (`mcp.sandbox`)    | `aws_route53_record`                                   |
+| MCP's inbound SG rule (port 18080)          | `aws_security_group_rule`                              |
 
 Two ways to actually do this, given everything above already exists and is confirmed
 working:
@@ -334,3 +398,13 @@ Either way, the EC2 instance itself (`<instance-id>`) and the `launch-wizard-25`
 security group it already uses are **not** part of this — per the earlier design note,
 compute stays out of Terraform/OpenTofu management; only the ALB/DNS/cert layer around
 it would be codified.
+
+**This matters more than it might look like at first.** The instance is *shared* with
+production — it's the same box, not a sandbox-only resource. A first pass at an
+OpenTofu sandbox module found this exact tension in review: it modeled the EC2 instance
+as something OpenTofu creates/owns (`aws_instance`), which means a routine
+`tofu destroy` for the "sandbox" environment would destroy the shared instance —
+taking production down with it. If/when compute *does* get brought into OpenTofu, it
+needs to be **imported** (read via a `data` source, or owned by a `production`-level
+environment that sandbox only references) — never modeled as something a disposable
+"sandbox" environment can create or destroy.
