@@ -78,6 +78,13 @@ isolation boundary today, and it works.
 
 - Current instance type and monthly cost. Splitting doubles it (approximately).
 - Explicit answer: are we OK with a sandbox load test potentially degrading prod?
+- What is SG `sg-02e6912482926898b` attached to? Referenced by three inbound
+  rules on prod's SG (ports 13000, 18004, 18007 — sandbox UI + two sandbox
+  services), but its own attachment isn't yet known. Run
+  `aws ec2 describe-network-interfaces --filters Name=group-id,Values=sg-02e6912482926898b --region us-east-2`.
+  Result informs the Lean above: attached to a live ENI → sandbox already has
+  dedicated network state we'd need to reconcile; attached to nothing → it's
+  an aspirational SG someone created ahead of the work.
 
 ---
 
@@ -189,6 +196,56 @@ call the script when reconciliation is needed).
 
 **Lean.** PyInfra-facts approach. Don't force cross-repo shell rewrites unless the fact
 approach can't express what we need.
+
+### 11. Production security-group hardening
+
+**Question.** Prod's SG (`launch-wizard-25`) has several ports open to
+`0.0.0.0/0` — observed while capturing `discovery.md`. Which of these are
+intentional design and which are drift-through-history? What tightens, and
+when?
+
+The observed exposure (from `discovery.md` §Security groups):
+
+- **SSH:22** open to the internet. Covered separately by §5 (SSH/SSM);
+  noted here so the SG-hardening discussion doesn't miss it.
+- **pgAdmin (5051)** publicly reachable — database admin UI on the open
+  internet.
+- **Oxigraph HTTP (7878)** publicly reachable — depending on SPARQL auth,
+  either intentional read access or an unintentional write vector.
+- **Every application port** — 3000, 8000, 8004, 8007, 8010, 8080 —
+  open to `0.0.0.0/0`. **Direct-port access bypasses the ALB entirely**,
+  which means the ALB in front of these services is effectively cosmetic
+  today. The §6 ALB migration (3 → 1) buys much less than it appears to
+  as long as this is true.
+
+**Options.**
+
+- **Leave as-is.** Matches current behavior; nothing breaks. Continues to
+  make ALB routing/TLS/host-based rules bypassable.
+- **Tighten app ports to ALB-only.** Change each app-port rule's source
+  from `0.0.0.0/0` to the ALB's security group. Forces traffic through
+  the ALB, making the §6 migration meaningful. Requires knowing every
+  external caller relies on the domain, not the direct IP:port. Risk:
+  hardcoded `IP:port` clients (e.g. `NEXT_PUBLIC_QUERY_SERVICE_URL`
+  today) break silently.
+- **Tighten admin ports (pgAdmin, Oxigraph) first, defer app ports.**
+  Least-risk starting point. Admin UIs on the open internet is
+  ~unambiguously bad; app-port tightening depends on §6 progress.
+
+**Lean.** Not blocking v1 sandbox — sandbox brings its own SG that we
+control from day one. For prod, tackle in this order once we own the SG
+in OpenTofu: (1) close pgAdmin and Oxigraph from the internet, (2) do
+the §6 ALB migration, (3) tighten app ports to ALB-only once §6 is
+live and clients are known-good on the domain path.
+
+**Verify.**
+
+- Which callers (external services, scripts, dashboards) still use
+  direct `IP:port` for prod's app ports? A change here breaks them.
+- Is pgAdmin's public reachability intentional (someone actually reaches
+  it that way) or historical drift? Ask Tek.
+- Same for Oxigraph:7878 — is anything outside the instance depending
+  on direct HTTP access, or is it purely for internal reads today?
 
 ---
 
