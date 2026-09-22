@@ -1,167 +1,237 @@
-# BrainKB infrastructure — decisions
+# Open decisions: OpenTofu + PyInfra adoption
 
-Open questions, choices, and design intent for BrainKB's
-infrastructure. Sibling to:
+Open questions that must be answered before we start writing `.tf` or `pyinfra` code.
+See `README.md`, `bootstrap.md`, and `sandbox/notes.md` for what exists today; the September 2026
+architecture summary (OpenTofu + PyInfra) for the target shape. This file is a decisions
+log — nothing here is final until we mark it so.
 
-- `discovery.md` — what exists in AWS today (raw values, no opinions).
-- `bootstrap.md` — how one-time setup was done (runbook).
-- This file — *why* we're going where we're going.
+Convention:
 
-Anything forward-looking or opinion-based about the infrastructure
-belongs here, not in `discovery.md`.
+- **Lean** — a recommendation to react to, not yet a decision.
+- **Verify** — information we need to gather before deciding.
+- **Answered** — response received; captures who and when. May settle the
+  question, or reframe it into a follow-up.
+- **Decided** — added once we agree; keep the reasoning above it.
 
-**Note on section numbering.** Other files in the repo cite this doc
-by section number (e.g. `decisions.md §5`, `§1`, `§2`, `§8`) —
-references that predate this file's current shape. Once the section
-list below stabilizes, sweep the repo for `decisions.md §` and update
-the citations to match.
+---
 
-## Sandbox and production compute — shared EC2 or separate?
+## 1. FSx flavor for Oxigraph persistence
 
-**Status: open, blocked on Tek's input.**
+**Answered (2026-09-16, Tek).** Prod uses **FSx for Lustre** with an S3
+data-repository association. That's the current baseline; codify it in v1.
 
-Today "sandbox" is a set of processes co-tenanted on production's
-`c5.4xlarge` (see `sandbox/README.md`, `sandbox/notes.md`) — separate
-PM2 process, separate Docker network, +10000 port offset, but same
-host, kernel, IAM role, and security group as prod.
+**Residual follow-up (not blocking v1).** Whether to migrate off Lustre later
+for cost/complexity reasons — Lustre is HPC-shaped and Oxigraph's I/O profile
+is not. Revisit once the tofu module for Lustre is in and we have real cost
+data. If we ever migrate, EFS or FSx for OpenZFS are the plausible targets.
 
-Options:
+---
 
-- **Keep co-tenanting long-term.** Prod's `c5.4xlarge` runs at ~0.4%
-  CPU per `bootstrap.md` — massively over-provisioned. A dedicated
-  sandbox `t3.medium` adds ~$30/month for capacity we don't need. One
-  host to patch, monitor, back up, and SSH into. Sandbox exercises the
-  same kernel, network stack, FSx mount, and system quirks as prod.
+## 2. Backup semantics for the graph store
 
-  Tradeoffs: sandbox misbehavior (OOM, runaway ML jobs, memory leaks)
-  can degrade or kill prod. Kernel patches / Docker restarts /
-  reboots hit both at once. Sandbox's placeholder secrets and
-  half-configured OAuth become part of prod's attack surface. Sandbox
-  can't be used to validate infra changes (instance type, AMI, IAM
-  role) because doing so is doing it to prod. The 0.4% CPU figure
-  holds only while prod is idle.
+**Answered (2026-09-16, Tek).** The FSx-to-S3 mirror **is** the backup story
+— prod already has one configured, and recovery is via S3. Details are in a
+Slack thread; not yet captured in this repo. No separate `oxigraph dump` job
+is planned.
 
-- **Move sandbox to its own EC2** (as PR #3 currently proposes).
-  Cleaner isolation, lets sandbox break freely, lets us test infra
-  changes. Costs ~$30/month and doubles the ops surface for a small
-  team.
+**Follow-up: capture from Slack.** The backup configuration currently lives
+only in Slack. Port the concrete details (bucket name, sync direction,
+retention/versioning settings, restore procedure) into `bootstrap.md` so it
+survives Slack retention and stops being tribal knowledge.
 
-The decision substantially determines the shape of PR #3 — see that
-PR's discussion. Needs Tek's call before PR #3 can move forward.
+**Residual risk to name, not a blocker.** FSx↔S3 mirror is filesystem
+replication, not an application-consistent backup. It covers:
 
-## Security posture (observations from `discovery.md`)
+- EC2 disk loss / instance failure / region-scoped recovery.
 
-The production security group (`launch-wizard-25`) has several things
-worth revisiting:
+It does **not** cover:
 
-- **SSH port 22 is open to `0.0.0.0/0`.** Predates any CI ambition.
-  See "SSH access / SSM adoption" below for the intended replacement.
-- **pgAdmin (port 5051) is publicly reachable.** Database admin UI on
-  the open internet.
-- **Oxigraph HTTP (port 7878) is publicly reachable.** Depending on
-  SPARQL auth, either intentional read access or an unintentional
-  write vector.
-- **Every application port is `0.0.0.0/0`** — 3000, 8000, 8004, 8007,
-  8010, 8080. The ALB in front of these services is effectively
-  cosmetic today; direct-port access bypasses HTTPS, domains, and any
-  ALB-enforced routing.
+- Application-level corruption (Oxigraph mid-write when something goes
+  wrong on the host).
+- Accidental logical deletes (a bad `SPARQL DELETE`, a wrong migration).
+- Ransomware or operator error propagating to S3 before it's noticed.
 
-None of these are "wrong" per se — they may all be intentional given
-the current deployment shape. Worth pinning down with Tek which are
-intentional and which are hardening opportunities.
+Recording this so accepting it is a conscious choice. If those failure
+modes turn out to matter later, a periodic `oxigraph dump` to a separate
+versioned bucket is the cheap add-on.
 
-## Cost and sizing
+---
 
-Prod runs `c5.4xlarge` — roughly $0.60–0.70/hour on-demand, several
-hundred dollars per month for compute alone. Utilization is ~0.4% CPU
-per `bootstrap.md`, so this is not proportional to load.
+## 3. One EC2 instance or two
 
-Not something to change today for production. Relevant for sandbox:
-if sandbox ends up on its own instance (see co-tenant decision above),
-`t3.small` or `t3.medium` is a reasonable starting size — order of
-magnitude cheaper — since sandbox does not need to match prod's
-capacity.
+**Question.** `bootstrap.md` says sandbox and prod currently share one EC2 (idle at 0.39%
+CPU). The architecture summary implies separate compute per environment. Do we split?
 
-## SSH access / SSM adoption
+**Options.**
 
-Production EC2 has no IAM instance profile attached today
-(`discovery.md` §IAM). Attaching one is the natural first step for:
+- **Co-tenant** (matches today). Cheap, one host to manage. Blast-radius risk: a sandbox
+  misbehavior (OOM, port collision, docker daemon wedge) can degrade prod.
+- **Split** (proposal default). Two EC2 instances. Safer, ~2x compute cost, more surface
+  for PyInfra to reconcile. Sandbox becomes a genuine pre-prod test bed.
 
-- **SSM Session Manager** — replaces SSH:22 with authenticated,
-  logged sessions using the instance's IAM role, and lets us close
-  port 22 to the internet entirely.
-- **S3 role-based access** — eliminates static credentials for
-  FSx/S3 interaction.
+**Lean.** Co-tenant for v1, but write the OpenTofu module with a `dedicated_instance` bool
+var so we can flip to split later without a rewrite. Sandbox and prod already have
+separate Docker networks and a `+10000` port offset (per recent commit); that's the
+isolation boundary today, and it works.
 
-Not blocking today; a prerequisite before any of those adoptions.
+**Verify.**
 
-## Secrets Manager
+- Current instance type and monthly cost. Splitting doubles it (approximately).
+- Explicit answer: are we OK with a sandbox load test potentially degrading prod?
 
-Placeholder — referenced from `discovery.md` and PR #3 comments.
-Intent: rotated, role-based secret access instead of static values in
-`.env` files. Depends on the IAM instance profile above. Full design
-TBD.
+---
 
-## FSx for Lustre (persistent storage architecture)
+## 4. Ollama and GPU
 
-Placeholder — referenced from PR #3's `tofu/modules/brainkb/storage.tf`
-stub. Production's Oxigraph data lives on an FSx for Lustre filesystem
-mounted at `/fsx/brainkb-kg-repo`. Sandbox uses a plain Docker named
-volume today. Whether sandbox needs to mirror the FSx setup is
-deferred. Full design TBD once FSx filesystem details are captured
-(see `discovery.md` "Data gaps").
+**Answered (2026-09-16, Tek).** Prod runs Ollama on **CPU** — no GPU
+instance. There's an open consideration to move to **AWS Bedrock** (or
+another cheap managed provider) since BrainKB isn't deploying large models.
 
-## S3 (backup / data-repository path)
+**Lean.** v1 codifies the current state — CPU-only Ollama, non-GPU EC2
+instance family. Treat the managed-API migration as a separate follow-up
+change once the provider decision is made; don't scope it into v1.
 
-Placeholder — referenced from PR #3's `tofu/modules/brainkb/storage.tf`
-stub. The S3 bucket linked to FSx as its data-repository association
-is also the current backup path per Tek. Bucket ID, versioning, and
-sync direction TBD.
+**Reframed question for later.** Self-hosted CPU Ollama vs Bedrock vs a
+cheaper managed provider — cost, latency, model availability, and
+data-egress considerations. Worth its own short comparison doc when the
+team is ready to pick.
 
-## Sandbox in a partial state
+---
 
-Security group `sg-02e6912482926898b` exists in AWS and is referenced
-by three inbound rules on the production EC2's SG (ports 13000, 18004,
-18007 — the sandbox UI + two sandbox services). What that SG is
-attached to is not yet discovered — clarifies whether sandbox
-currently has any dedicated network interfaces or is fully co-tenanted
-on prod's compute. See `discovery.md` "Data gaps." Feeds directly into
-the co-tenant decision above.
+## 5. Host access path: SSH vs SSM Session Manager
 
-## Sandbox ALB / DNS plan (contingent on the co-tenant decision)
+**Answered (2026-09-16, Tek).** SSH access to the EC2 instance is available
+today.
 
-If sandbox gets dedicated compute:
+**Refined (2026-09-18, implementation spec §20).** SSH is fine for **human
+operators from a laptop**. It is **not** fine to open `:22` to
+`0.0.0.0/0` (or "the internet") so that GitHub Actions can reach the box.
+Treat CI reachability into private infrastructure as an explicit
+architecture decision, not a shortcut to widen an SG rule.
 
-- Sandbox ALB spans all three subnets for multi-AZ resilience.
-- New Route 53 records under `Z06918342ADZVPCW09HXW` (ALIAS records
-  pointing at the sandbox ALB), replacing the stale `sandbox.` A
-  record noted in `discovery.md` / `sandbox/notes.md`.
-- Host-based routing on a single ALB for three sandbox domains, per
-  `sandbox/notes.md`'s current pattern.
+**Lean (v1, sandbox).** Use SSH from operator laptops for PyInfra during
+sandbox bring-up. Two operational items to nail down as v1 lands:
 
-If sandbox stays co-tenanted, most of this changes shape — the ALB
-and DNS records still exist, but the target group points at prod's
-existing EC2 rather than a new one.
+- Which SSH key does PyInfra use? Operator's personal key vs a dedicated
+  deploy key stored somewhere durable (1Password, SSM, a GitHub Actions
+  secret if CI drives deploys).
+- Which source IPs can reach port 22 today? Confirm the current SG rule —
+  operator IPs, a bastion, or open — before it becomes a security review
+  finding.
 
-## ALB architecture for production
+**Phased plan for CI connectivity (implementation spec §20).** When
+PyInfra needs to run from GitHub Actions, pick one of these — do not just
+widen the :22 rule:
 
-Production currently uses **three separate ALBs**, one per domain
-(`beta.`, `usermanagement.`, `mlservice.`), dig-verified via distinct
-IP sets (see `bootstrap.md`). Sandbox uses a **single ALB with
-host-based routing** for its three domains (see `sandbox/notes.md`).
+1. **Self-hosted runner inside the VPC.** Simplest network reasoning; the
+   runner has direct access. Costs: running and updating a runner host.
+2. **SSM-based execution.** No public :22, no keys to distribute. IAM
+   controls who can run commands; CloudTrail logs everything. Matches the
+   original §5 lean.
+3. **Controlled bastion / private connectivity.** Traditional; more
+   moving parts than SSM but familiar patterns.
 
-Both patterns work. Whether production should eventually migrate to
-sandbox's single-ALB pattern is a separate question — cheaper (one
-ALB vs three) but requires a migration path. Not on the roadmap
-today; noted here so the option isn't lost.
+None of these blocks v1 sandbox from operator laptops. Pick one when CI
+actually becomes the driver.
 
-## Data-gap priority
+---
 
-The gap list in `discovery.md` in rough order of downstream impact:
+## Second-tier decisions
 
-1. **ALB inventory** — needed for prod-import work, not sandbox.
-2. **FSx filesystem details** — needed before codifying persistent
-   storage.
-3. **Sandbox SG (`sg-02e6912482926898b`) attachment** — clarifies
-   sandbox's current state, feeds the co-tenant decision.
-4. **S3 bucket inventory** — the FSx-linked bucket, plus any others.
+Can wait past v1 sandbox; must resolve before prod cutover.
+
+### 6. Prod ALB migration: 3 → 1
+
+Prod has 3 ALBs today (per `sandbox/notes.md`, dig-verified). Sandbox is being built as 1 ALB with
+host-based routing. Migrating prod is a live DNS cutover, not a `tofu import`. It needs
+its own runbook: TTL reduction ahead of time, per-domain flip, rollback plan, target-group
+draining.
+
+**Lean.** Land sandbox on the 1-ALB pattern, run it for a few weeks, then plan the prod
+migration as its own change with a scheduled window.
+
+### 7. `query_service` topology
+
+Prod exposes `query_service` on host:8010 directly, no ALB (per `bootstrap.md`). Options:
+keep the direct-port pattern (breaks the "everything behind the ALB" model), or move it
+behind `queryservice.brainkb.org` (breaking change for any hardcoded clients, including
+`NEXT_PUBLIC_QUERY_SERVICE_URL` or equivalent in `.env.local`).
+
+**Lean.** Move it behind the ALB as part of the 3→1 migration. Same ALB, new host-based
+rule, matching ACM SAN. Env var updates ship in the same PR.
+
+### 8. Secrets: SSM SecureString vs Secrets Manager
+
+The summary says "Secrets Manager / SSM" as if interchangeable. They aren't: SSM
+SecureString is free; Secrets Manager is $0.40/secret/month + built-in rotation hooks.
+
+**Lean.** SSM SecureString as the default. Upgrade individual secrets to Secrets Manager
+only when we want automatic rotation (probably: RDS credentials if/when we adopt RDS).
+
+**Also.** The two secrets `bootstrap.md` §Credentials flags for rotation
+(`MONGO_DB_URL` embedded password; `CHAT_SERVICE_JWT_SECRET_KEY`) should rotate as part of
+moving them into SSM, not after.
+
+### 9. CI/CD: laptop-driven or GitHub Actions
+
+Repo already has `sandbox-deploy.yml` and `production-deploy.yml`. The summary is silent
+on whether `./scripts/deploy sandbox` runs locally, in Actions, or both.
+
+**Lean.** Both, from the same script. Actions authenticates to AWS via **OIDC** (no static
+IAM user keys). Prod requires manual approval via a GitHub Environment protection rule.
+
+### 10. Idempotence of `start_service.sh` / `up-node.sh`
+
+The summary flags making these idempotent as work to do — and that's cross-repo work.
+Cheaper alternative: leave the scripts as-is, put the idempotence in PyInfra facts (check
+"expected container running with expected image digest? PM2 process `X` online?" and only
+call the script when reconciliation is needed).
+
+**Lean.** PyInfra-facts approach. Don't force cross-repo shell rewrites unless the fact
+approach can't express what we need.
+
+---
+
+## Architecture directions from the implementation spec
+
+Items the September implementation brief calls out as target-state or
+workflow discipline. Not decisions to make now, but not things to forget
+either.
+
+### Private EC2 behind ALB (spec §7)
+
+The target networking model is:
+
+    Internet → IGW → public subnets → ALB → private subnets → EC2 → FSx
+
+Current prod EC2 is public (per `bootstrap.md`). Moving to a private
+subnet is a v2 concern, not a v1 blocker: it interacts with §5 (host
+access path) and §7 in the second-tier list (`query_service` currently on
+direct host:port). Record the direction so v1 doesn't design around a
+public-EC2 assumption we'd have to walk back.
+
+### GitHub workflow concurrency groups (spec §21)
+
+Every deployment workflow must set a concurrency group scoped to its
+environment (e.g. `brainkb-sandbox`, `brainkb-production`) with
+`cancel-in-progress: false`. Prevents two `tofu apply` (or PyInfra) runs
+from racing on the same state file / host. Trivial to add when we write
+the workflows; easy to forget until two deploys collide.
+
+### Separate infra deploys from app deploys (spec §22)
+
+Long-term: a change to `brainkb-infrastructure` runs OpenTofu + PyInfra;
+a change to `brainkb-backend` or `brainkb-ui` runs only PyInfra's
+app-deployment tasks (no `tofu apply` when infra didn't change). v1 can
+use a single workflow that always runs both — the spec explicitly permits
+"one simpler deployment workflow first, then optimize triggers later."
+Splitting is an ergonomic optimization, not a correctness requirement.
+
+---
+
+## Not on the table for v1
+
+Restating the summary's §10 for the record: Kubernetes, ECS migration, autoscaling,
+service mesh, blue/green deployment, multi-instance HA, and complex GitOps machinery are
+all deferred. If a decision here would only make sense with one of those, defer the
+decision too.

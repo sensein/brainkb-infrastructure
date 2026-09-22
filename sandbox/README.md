@@ -102,6 +102,26 @@ PM2_APP_NAME=brainkb-ui-sandbox PORT=13000 bash bin/up-node.sh
 This rebuilds the Next.js app (`NEXT_PUBLIC_*` values get baked in fresh each time) and
 reloads the PM2 process in place.
 
+**MCP server (brainkb_mcp — separate repo, own checkout under
+`~/sandbox-workspace/brainkb_mcp`, not part of this repo's compose stack):**
+```
+cd brainkb_mcp && git checkout <branch> && git pull
+sudo docker compose up -d --build --force-recreate
+```
+`--force-recreate` matters even for a plain `.env` change with no code change: a container
+only has `.env` injected at *creation* time, so restarting a process inside an
+already-running container (or a plain `docker compose up -d` that doesn't detect a change)
+won't pick up new values — only recreating the container will.
+
+Verify:
+```
+sudo docker logs --tail 30 brainkb-mcp
+curl -sI https://mcp.sandbox.brainkb.org/
+curl -s https://mcp.sandbox.brainkb.org/healthz
+```
+Expect a clean startup log (no `MCP_TRUSTED_PROXIES is empty` warning), `200` on the first
+curl, `ok` on the second.
+
 **Verifying it's actually live**, not just that the process/container started:
 ```
 curl -sI --max-time 10 https://sandbox.brainkb.org/
