@@ -9,9 +9,12 @@ Snapshot of the AWS resources BrainKB production runs on, as of
 - `bootstrap.md` — human-readable runbook for one-time manual setup.
   Reference it for *how* things were done; reference this doc for
   *what exists*.
-- `decisions.md` — open questions with what's answered and what isn't.
-  Reference it for *why we're going where we're going*.
-- This file — the raw values in AWS today.
+- `decisions.md` — open questions, choices, and design intent.
+  Reference it for *why we're going where we're going*, including
+  interpretations of and forward-looking plans about anything in this
+  file.
+- This file — the raw values in AWS today. Design intent, opinions,
+  and forward-looking plans belong in `decisions.md`, not here.
 
 ## AWS account and region
 
@@ -37,8 +40,6 @@ standard default-VPC layout.
 | `subnet-01126225d35c86c11` | us-east-2c | 172.31.32.0/20 | yes |
 
 Production EC2 sits in `subnet-04b630da6d9b3674c` (us-east-2a).
-
-Sandbox ALB will span all three so it's multi-AZ resilient by default.
 
 ## EC2 instance
 
@@ -104,8 +105,6 @@ sandbox compute exists or is still notional. Command:
 - **No IAM role attached to the production EC2 instance.**
 - Any current AWS API access from the instance uses static credentials
   or nothing at all.
-- Attaching an instance profile is the natural first step when we
-  adopt SSM / Secrets Manager (decisions.md §5, §8).
 
 ## Route 53
 
@@ -115,9 +114,6 @@ Both public hosted zones in this account:
 |---|---|---|---|
 | `brainkb.org.` | `Z06918342ADZVPCW09HXW` | 25 | The one we manage; holds the 4 confirmed-live subdomains from `bootstrap.md` (`beta.`, `usermanagement.`, `mlservice.`, `mcp.`) plus ACM validation records and the stale `sandbox.brainkb.org` A record noted in `sandbox/notes.md`. |
 | `bican-kb.com.` | `Z05781153K6JB7XXSHR1O` | 4 | Related BICAN project domain; not part of this BrainKB inventory. |
-
-For sandbox: new records under `Z06918342ADZVPCW09HXW` (ALIAS records
-pointing at the sandbox ALB — replacing the stale `sandbox.` A record).
 
 ## Storage — FSx + S3
 
@@ -138,9 +134,9 @@ name.
 
 TBD. `bootstrap.md` describes three separate production ALBs (one per
 domain: `beta.`, `usermanagement.`, `mlservice.`) — dig-verified via
-distinct IP sets. `sandbox/notes.md` targets a single ALB with
-host-based routing (the opposite pattern), which is also the target
-architecture for prod eventually. Command:
+distinct IP sets. `sandbox/notes.md` describes a single ALB with
+host-based routing serving three sandbox domains — a different
+pattern in current use. Commands to enumerate:
 
     aws elbv2 describe-load-balancers --region us-east-2
     aws elbv2 describe-target-groups --region us-east-2
@@ -165,58 +161,16 @@ Not repeated here — see `production/backend.env.template` and
 `bootstrap.md` §Credentials for the two known-exposed values that
 need rotation.
 
-## Notable observations
-
-Things that stood out during discovery. Fold-in candidates for
-`decisions.md` or immediate hardening work — not decisions
-themselves.
-
-### Security posture
-
-- **SSH port 22 is open to `0.0.0.0/0`.** Predates any CI ambition;
-  matches decisions.md §5's warning about not widening `:22` for CI.
-- **pgAdmin (port 5051) is publicly reachable.** Database admin UI
-  on the open internet.
-- **Oxigraph HTTP (port 7878) is publicly reachable.** Depending on
-  SPARQL auth, either intentional read access or an unintentional
-  write vector.
-- **Every application port is `0.0.0.0/0`** — 3000, 8000, 8004,
-  8007, 8010, 8080. The ALB in front of these services is
-  effectively cosmetic today; direct-port access bypasses HTTPS,
-  domains, and any ALB-enforced routing.
-
-### Cost signal
-
-- `c5.4xlarge` is roughly $0.60–0.70/hour on-demand → several
-  hundred dollars per month for compute alone. Given the ~0.4% CPU
-  utilization noted in `bootstrap.md`, this is not proportional to
-  load. Not something to change today, but sandbox does not need to
-  match — `t3.small` or `t3.medium` is a reasonable starting size,
-  order of magnitude cheaper.
-
-### Missing IAM role
-
-- Attaching an instance profile is a prerequisite to using SSM /
-  Secrets Manager / S3 role-based access cleanly. First natural step
-  when we bring managed AWS services into the picture.
-
-### Sandbox exists in a partial state
-
-- SG `sg-02e6912482926898b` exists and is referenced by three
-  prod-EC2 rules (sandbox UI + two sandbox services). What it's
-  attached to is TBD — clarifies whether sandbox compute is standing
-  up or still on paper.
-
 ## Data gaps
 
-In priority order:
+Items still to discover (priority discussion in `decisions.md`):
 
-1. **ALB inventory** — needed for prod-import (Phase 10), not sandbox
-   greenfield.
-2. **FSx filesystem details** — needed for Phase 5 storage
-   codification.
-3. **Sandbox SG attachment** — clarifies sandbox's current state.
-4. **S3 bucket inventory** — the FSx-linked bucket, plus any others.
+- ALB inventory (load balancer ARNs, target groups, listener rules).
+- FSx filesystem details (ID, throughput mode, deployment type,
+  capacity, linked S3 bucket).
+- Sandbox SG (`sg-02e6912482926898b`) attachment — what network
+  interfaces reference it.
+- S3 bucket inventory (the FSx-linked bucket, plus any others).
 
 ## Provenance
 
