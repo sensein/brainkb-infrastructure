@@ -5,7 +5,12 @@ data "aws_ami" "ubuntu" {
 
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-jammy-22.04-amd64-server-*"]
+    # Match both the standard (hvm-ssd) and gp3-tagged (hvm-ssd-gp3)
+    # AMI families. Canonical doesn't publish the gp3-tagged variant
+    # for every region+release combination (jammy in us-east-2 has
+    # only the hvm-ssd family right now). The root volume gets
+    # converted to gp3 by compute.tf's root_block_device regardless.
+    values = ["ubuntu/images/hvm-ssd*/ubuntu-jammy-22.04-amd64-server-*"]
   }
 
   filter {
