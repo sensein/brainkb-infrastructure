@@ -1,6 +1,6 @@
 resource "aws_security_group" "app" {
   name        = "${local.name}-app"
-  description = "BrainKB ${var.environment} application host. Ingress is scoped: SSH from operator CIDRs only; app ports from the ALB SG (added in the ALB slice)."
+  description = "BrainKB ${var.environment} application host. Ingress is scoped: SSH from operator CIDRs only; app ports from the ALB SG (see alb.tf), never 0.0.0.0/0."
   vpc_id      = var.vpc_id
 
   tags = merge(local.tags, { Name = "${local.name}-app" })

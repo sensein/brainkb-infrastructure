@@ -47,7 +47,7 @@ variable "alb_targets" {
 }
 
 variable "dns_allow_overwrite" {
-  description = "If true, Route 53 records may replace existing records with the same name+type. True in sandbox to handle the stale sandbox.brainkb.org A record (see sandbox/notes.md)."
+  description = "If true, Route 53 records may replace existing records with the same name+type. True in sandbox so tofu can take over the sandbox.brainkb.org records already in place from the manual ALB setup (see sandbox/notes.md)."
   type        = bool
   default     = false
 }

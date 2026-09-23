@@ -8,7 +8,7 @@ vpc_id = "vpc-056bce0f8a2a73bfe"
 
 # All three default-VPC subnets (one per AZ). The EC2 lands in
 # subnet_ids[0] — us-east-2a, matching production placement. The ALB
-# slice will span all three for multi-AZ resilience.
+# spans all three for multi-AZ resilience.
 subnet_ids = [
   "subnet-04b630da6d9b3674c", # us-east-2a — prod EC2 also here
   "subnet-0d82ab2916c10c979", # us-east-2b
@@ -56,10 +56,12 @@ alb_targets = [
   },
 ]
 
-# sandbox.brainkb.org already has a stale A record pointing at
-# 192.2.0.233 (per sandbox/notes.md). This flag lets tofu replace it
-# with the ALB ALIAS. NEVER set true in production — production
-# records should be imported into state before apply.
+# sandbox.brainkb.org (and the two subdomains) already have live
+# Route 53 aliases pointing at the manually-built sandbox-alb (per
+# sandbox/notes.md step 7b). This flag lets tofu take those records
+# over and re-point them at the tofu-managed ALB. NEVER set true in
+# production — production records should be imported into state
+# before apply.
 dns_allow_overwrite = true
 
 # Sandbox does not create FSx by default — bootstrap.md notes it's

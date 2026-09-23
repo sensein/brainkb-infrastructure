@@ -14,7 +14,7 @@ output "instance_private_ip" {
 }
 
 output "app_security_group_id" {
-  description = "Security group ID attached to the application host. Later slices (ALB) reference this."
+  description = "Security group ID attached to the application host. The ALB SG (alb.tf) references it as its ingress source."
   value       = aws_security_group.app.id
 }
 
@@ -68,12 +68,12 @@ output "data_bucket_name" {
   value       = var.enable_fsx ? aws_s3_bucket.data[0].id : null
 }
 
-# Structured output for the OpenTofu → PyInfra contract
-# (implementation spec §11). The adapter reads this block via
-# `tofu output -json pyinfra`. fsx_* fields are null when FSx isn't
-# provisioned so the adapter can fall back to a Docker named volume.
+# Structured output for the OpenTofu → PyInfra contract. The adapter
+# reads this block via `tofu output -json pyinfra`. fsx_* fields are
+# null when FSx isn't provisioned so the adapter can fall back to a
+# Docker named volume.
 output "pyinfra" {
-  description = "Structured inventory intended for the PyInfra adapter (spec §11)."
+  description = "Structured inventory intended for the PyInfra adapter: environment, hosts[], ui_port, backend_port, and fsx_* (null when enable_fsx=false)."
   value = {
     environment = var.environment
 

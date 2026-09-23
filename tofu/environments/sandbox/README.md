@@ -53,10 +53,11 @@ and its three public subnets in us-east-2 (see `discovery.md`).
 - A-ALIAS records in `brainkb.org` (zone `Z0691…`, per `discovery.md`)
   for `sandbox.brainkb.org`, `usermanagement.sandbox.brainkb.org`,
   and `mlservice.sandbox.brainkb.org`, pointing at the ALB.
-- `dns_allow_overwrite = true` — sandbox has a stale
-  `sandbox.brainkb.org` A record from an earlier attempt (per
-  `sandbox/notes.md`); this flag lets tofu replace it in place. Never
-  set true for production.
+- `dns_allow_overwrite = true` — sandbox's Route 53 records for
+  `sandbox.brainkb.org` etc. already exist from the manual ALB setup
+  (per `sandbox/notes.md`); this flag lets tofu take them over in
+  place, re-pointing them at the tofu-managed ALB. Never set true for
+  production — import existing records into state first instead.
 
 **Storage — deliberately off by default in sandbox**
 
@@ -82,9 +83,9 @@ and its three public subnets in us-east-2 (see `discovery.md`).
 
 **Not yet in this environment** (own PRs, in order):
 
-- PyInfra host configuration (Phase 4+)
-- PyInfra app deployment (Phase 6-7)
-- GitHub Actions automation (Phase 9)
+- PyInfra host configuration
+- PyInfra app deployment
+- GitHub Actions automation for `tofu` + PyInfra runs
 
 ## How to run
 
@@ -100,9 +101,9 @@ backend. Rerun it any time `versions.tf` or `backend.hcl` changes.
 ## Host access
 
 `ssh_allowed_cidrs` defaults to `[]` — no SSH allowed to the world.
-This is deliberate: the implementation spec §20 and `decisions.md` §5
-both call out that opening `:22` broadly is not an acceptable
-shortcut. Three ways to reach the instance:
+This is deliberate: `decisions.md` §5 (SSH/SSM) calls out that
+opening `:22` broadly is not an acceptable shortcut, especially not
+for CI. Three ways to reach the instance:
 
 1. **SSM Session Manager (recommended, no config needed).** Once the
    instance is up, either:

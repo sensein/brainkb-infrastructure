@@ -4,17 +4,17 @@ variable "environment" {
 }
 
 variable "vpc_id" {
-  description = "ID of an existing VPC to place resources in. v1 reuses the account's default VPC; a dedicated VPC is a v2 direction (implementation spec §7)."
+  description = "ID of an existing VPC to place resources in. v1 reuses the account's default VPC (see discovery.md); a dedicated VPC is a v2 direction."
   type        = string
 }
 
 variable "subnet_ids" {
-  description = "Existing subnet IDs. Must cover at least two AZs once an ALB is added; the EC2 lands in subnet_ids[0]."
+  description = "Existing subnet IDs. Must cover at least two AZs — the ALB spans them all for multi-AZ resilience. The EC2 lands in subnet_ids[0]."
   type        = list(string)
 
   validation {
-    condition     = length(var.subnet_ids) >= 1
-    error_message = "At least one subnet is required."
+    condition     = length(var.subnet_ids) >= 2
+    error_message = "At least two subnets are required (ALB is multi-AZ)."
   }
 }
 
@@ -53,7 +53,7 @@ variable "ssh_user" {
 }
 
 variable "hosted_zone_id" {
-  description = "Route 53 hosted zone ID for brainkb.org. Used by the ALB slice (dns.tf) once added."
+  description = "Route 53 hosted zone ID for brainkb.org. Used by dns.tf for the ACM validation CNAMEs and per-hostname A-ALIAS records."
   type        = string
 }
 
@@ -76,7 +76,7 @@ variable "root_volume_size_gb" {
 }
 
 variable "protect_persistent_data" {
-  description = "If true, persistent resources (FSx, S3 data buckets — added in a later slice) get lifecycle prevent_destroy. Set true for production."
+  description = "If true, persistent resources (FSx filesystem and the S3 data bucket in storage.tf) get lifecycle prevent_destroy. Set true for production."
   type        = bool
   default     = false
 }
@@ -103,7 +103,7 @@ variable "acm_certificate_arn" {
 }
 
 variable "dns_allow_overwrite" {
-  description = "If true, Route 53 records may replace existing records with the same name+type. Appropriate for sandbox where a known-stale record exists (see sandbox/notes.md); never set true for production — import existing records instead."
+  description = "If true, Route 53 records may replace existing records with the same name+type. Appropriate for sandbox where records already exist from the manual setup (see sandbox/notes.md); never set true for production — import existing records into state before apply instead."
   type        = bool
   default     = false
 }
