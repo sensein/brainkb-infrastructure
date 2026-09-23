@@ -69,15 +69,27 @@ CPU). The architecture summary implies separate compute per environment. Do we s
 - **Split** (proposal default). Two EC2 instances. Safer, ~2x compute cost, more surface
   for PyInfra to reconcile. Sandbox becomes a genuine pre-prod test bed.
 
-**Lean.** Co-tenant for v1, but write the OpenTofu module with a `dedicated_instance` bool
-var so we can flip to split later without a rewrite. Sandbox and prod already have
-separate Docker networks and a `+10000` port offset (per recent commit); that's the
-isolation boundary today, and it works.
+**Answered (2026-09-23, Tek).** Split is the target — sandbox and prod
+should run on different EC2 instances so production is never at risk
+from a sandbox issue. Co-tenant is fine transitionally while cutover
+lands.
 
-**Verify.**
+**Revised Lean.** Proceed with a dedicated sandbox EC2 in tofu (PR #3's
+current shape). Sandbox stays co-tenanted on prod's instance until the
+tofu-managed EC2 is live and its ALB target groups take over sandbox
+traffic, at which point tear down the sandbox PM2 process, Docker
+network, and shared SG rules on prod. The `dedicated_instance` bool
+var from the earlier Lean is no longer needed — dedicated is the goal.
 
-- Current instance type and monthly cost. Splitting doubles it (approximately).
-- Explicit answer: are we OK with a sandbox load test potentially degrading prod?
+**Verify (still open).**
+
+- What is SG `sg-02e6912482926898b` attached to? Referenced by three
+  inbound rules on prod's SG (ports 13000, 18004, 18007 — sandbox UI +
+  two sandbox services), but its own attachment isn't yet known. Run
+  `aws ec2 describe-network-interfaces --filters Name=group-id,Values=sg-02e6912482926898b --region us-east-2`.
+  Result tells us whether the tofu-managed sandbox EC2 should adopt this
+  SG or create its own — and, either way, whether the shared SG rules
+  on prod's SG can be dropped in the same cutover.
 
 ---
 
@@ -189,6 +201,54 @@ call the script when reconciliation is needed).
 
 **Lean.** PyInfra-facts approach. Don't force cross-repo shell rewrites unless the fact
 approach can't express what we need.
+
+### 11. Production security-group hardening
+
+**Question.** Prod's SG (`launch-wizard-25`) has several ports open to
+`0.0.0.0/0` — observed while capturing `discovery.md`. Which of these are
+intentional design and which are drift-through-history? What tightens, and
+when?
+
+The observed exposure (from `discovery.md` §Security groups):
+
+- **SSH:22** open to the internet. Covered separately by §5 (SSH/SSM);
+  noted here so the SG-hardening discussion doesn't miss it.
+- **pgAdmin (5051)** publicly reachable. **Answered (2026-09-23, Tek):
+  intentional — public web access is needed to reach it at all. Not
+  tightening.**
+- **Oxigraph HTTP (7878)** publicly reachable. **Answered (2026-09-23,
+  Tek): intentional — same rationale as pgAdmin, kept public.**
+- **Every application port** — 3000, 8000, 8004, 8007, 8010, 8080 —
+  open to `0.0.0.0/0`. **Direct-port access bypasses the ALB entirely**,
+  which means the ALB in front of these services is effectively cosmetic
+  today. The §6 ALB migration (3 → 1) buys much less than it appears to
+  as long as this is true. Whether to tighten these to ALB-only is still
+  open.
+
+**Options (for the still-open app-port question).**
+
+- **Leave as-is.** Matches current behavior; nothing breaks. Continues to
+  make ALB routing/TLS/host-based rules bypassable.
+- **Tighten app ports to ALB-only.** Change each app-port rule's source
+  from `0.0.0.0/0` to the ALB's security group. Forces traffic through
+  the ALB, making the §6 migration meaningful. Requires knowing every
+  external caller relies on the domain, not the direct IP:port. Risk:
+  hardcoded `IP:port` clients (e.g. `NEXT_PUBLIC_QUERY_SERVICE_URL`
+  today) break silently.
+
+**Revised Lean.** With pgAdmin and Oxigraph confirmed intentional, the
+remaining hardening work on prod's SG is: (1) close SSH:22 to the
+internet as part of §5's SSM adoption, and (2) tighten the six app
+ports to ALB-only as part of §6 — that's the missing piece that makes
+the 3-ALB → 1-ALB migration actually enforce routing/TLS instead of
+being cosmetic. Not blocking v1 sandbox (sandbox brings its own SG
+that we control from day one).
+
+**Verify (still open).**
+
+- Which callers (external services, scripts, dashboards) still use
+  direct `IP:port` for prod's app ports? A change under §6 breaks them.
+  Worth enumerating before the ALB migration ships.
 
 ---
 
