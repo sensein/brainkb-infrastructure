@@ -1,0 +1,55 @@
+name: OpenTofu
+
+# Formatting and validation checks for the tofu/ tree. Runs on any PR
+# that touches tofu/ (or this workflow itself), and on pushes to main
+# for the same paths. No AWS credentials are needed — `-backend=false`
+# on init lets `validate` run without contacting the S3 backend.
+#
+# When adding a new environment under tofu/environments/, add its
+# directory to the `validate` matrix below.
+
+on:
+  pull_request:
+    paths:
+      - "tofu/**"
+      - ".github/workflows/tofu.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tofu/**"
+      - ".github/workflows/tofu.yml"
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.8.0
+          tofu_wrapper: false
+      - name: tofu fmt -check -recursive tofu/
+        run: tofu fmt -check -recursive tofu/
+
+  validate:
+    name: validate (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir:
+          - tofu/modules/brainkb
+          - tofu/environments/sandbox
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.8.0
+          tofu_wrapper: false
+      - name: tofu init (no backend, no AWS creds needed)
+        working-directory: ${{ matrix.dir }}
+        run: tofu init -backend=false -input=false
+      - name: tofu validate
+        working-directory: ${{ matrix.dir }}
+        run: tofu validate -no-color
