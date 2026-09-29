@@ -292,6 +292,46 @@ internally.
 
 ## MCP server (`brainkb-mcp` / `mcp.sandbox.brainkb.org`) — done
 
+> **⚠ UNRESOLVED (2026-09-29): sandbox and production MCP are not isolated from
+> each other. Do not redeploy either one until the topology below is checked.**
+>
+> A deploy from the sandbox checkout was observed changing the production MCP
+> site. The cause is that `brainkb_mcp`'s `docker-compose.yml` hardcodes three
+> identifiers that both checkouts share:
+>
+> - `container_name: brainkb-mcp` — both stacks address the same container
+> - `image: brainkb-mcp:local` — `--build` overwrites the tag the other one runs,
+>   so the other picks up foreign code on its next recreate
+> - the compose **project name**, which defaults to the directory name
+>   (`brainkb_mcp` in both checkouts)
+>
+> The sandbox override below remaps only the host **port**, which is not enough:
+> port isolation is not identity isolation. Whichever checkout runs
+> `docker compose up` last wins, in both directions — and because port bindings
+> belong to the container, the loser also loses its port mapping and starts
+> failing its ALB health check.
+>
+> The intended fix is to give sandbox its own identity — `container_name:
+> brainkb-mcp-sandbox`, `image: brainkb-mcp:sandbox`, and an explicit
+> `docker compose -p brainkb-mcp-sandbox …` — and to track that override in this
+> repo rather than leaving it as an untracked file on the host. Better still,
+> parameterize `container_name`/`image` upstream in `brainkb_mcp` so the safe
+> path is the default. None of this is done yet.
+>
+> **Before touching either deployment**, establish what is actually running —
+> the claim below that production "already owns host port 8080" was an
+> assumption, never verified:
+> ```
+> docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' | grep -i mcp
+> docker images | grep -i mcp
+> docker inspect brainkb-mcp --format '{{.Config.Image}} | {{.Created}} | {{json .HostConfig.PortBindings}}'
+> ```
+> If only one MCP container exists, the two environments were never separate.
+>
+> Note the verification step in `sandbox/README.md` reads
+> `docker logs --tail 30 brainkb-mcp` — production's container name — so it has
+> been checking the wrong container all along. Fix that alongside the rest.
+
 Separate repo (`sensein/brainkb_mcp`), separate deployment mechanism from the main
 backend — its own `docker-compose.yml`/Dockerfile, not folded into this repo's
 `sandbox/docker-compose.yml` (same reasoning as why the UI isn't in there either: an

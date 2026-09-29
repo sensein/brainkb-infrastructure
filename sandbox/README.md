@@ -104,6 +104,15 @@ reloads the PM2 process in place.
 
 **MCP server (brainkb_mcp — separate repo, own checkout under
 `~/sandbox-workspace/brainkb_mcp`, not part of this repo's compose stack):**
+
+> **⚠ Do not run this yet (2026-09-29).** These commands are not safe as written:
+> sandbox and production MCP share a container name, image tag and compose
+> project, so deploying either one overwrites the other. Deploying from the
+> sandbox checkout has already been seen to change the production site. See
+> the warning in `notes.md` under "MCP server" for the cause, the checks to run
+> first, and the fix (`-p brainkb-mcp-sandbox` plus a distinct
+> `container_name`/`image`).
+
 ```
 cd brainkb_mcp && git checkout <branch> && git pull
 sudo docker compose up -d --build --force-recreate
@@ -115,7 +124,7 @@ won't pick up new values — only recreating the container will.
 
 Verify:
 ```
-sudo docker logs --tail 30 brainkb-mcp
+sudo docker logs --tail 30 brainkb-mcp   # NOTE: this is production's container name — see the warning above
 curl -sI https://mcp.sandbox.brainkb.org/
 curl -s https://mcp.sandbox.brainkb.org/healthz
 ```
