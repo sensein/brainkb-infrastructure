@@ -75,12 +75,6 @@ variable "root_volume_size_gb" {
   default     = 30
 }
 
-variable "protect_persistent_data" {
-  description = "If true, persistent resources (FSx filesystem and the S3 data bucket in storage.tf) get lifecycle prevent_destroy. Set true for production."
-  type        = bool
-  default     = false
-}
-
 variable "alb_targets" {
   description = "ALB routing targets. Each entry creates a target group + HTTPS listener rule that forwards its hostname to the given port on the EC2 host. At least one entry is required."
   type = list(object({

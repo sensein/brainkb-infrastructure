@@ -4,7 +4,7 @@ data "aws_ami" "ubuntu" {
   owners      = ["099720109477"] # Canonical
 
   filter {
-    name   = "name"
+    name = "name"
     # Match both the standard (hvm-ssd) and gp3-tagged (hvm-ssd-gp3)
     # AMI families. Canonical doesn't publish the gp3-tagged variant
     # for every region+release combination (jammy in us-east-2 has

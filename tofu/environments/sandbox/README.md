@@ -67,8 +67,8 @@ and its three public subnets in us-east-2 (see `discovery.md`).
 - The module code for FSx + S3 exists (`storage.tf`) — flipping
   `enable_fsx = true` provisions:
   - S3 bucket `sensein-brainkb-sandbox-data` (versioned, encrypted,
-    private) with `prevent_destroy` guarded by
-    `protect_persistent_data`.
+    private). The bucket, FSx filesystem and S3 link always carry
+    `prevent_destroy = true`.
   - FSx SG allowing Lustre client protocol (988, 1018-1023) from the
     app SG only.
   - FSx for Lustre filesystem — `SCRATCH_2` by default (cheaper,
@@ -155,10 +155,12 @@ hostname, not the ALB's own AWS-generated name.
 
     tofu destroy -var-file=sandbox.tfvars
 
-Safe today because sandbox has no persistent data yet. Once the
-storage slice lands, `protect_persistent_data = false` here still
-allows destroy for sandbox (as intended); production will flip that
-to `true`.
+Safe today because sandbox has no persistent data (`enable_fsx =
+false`). If FSx has been enabled, the S3 bucket, FSx filesystem and
+S3 link are protected by `prevent_destroy = true` in
+`modules/brainkb/storage.tf`; OpenTofu doesn't allow that to be a
+variable, so to tear them down on purpose, change it to `false`
+locally first (don't commit that).
 
 ## Common issues
 

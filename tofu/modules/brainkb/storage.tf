@@ -12,8 +12,11 @@ resource "aws_s3_bucket" "data" {
 
   bucket = local.data_bucket
 
+  # Always protected: OpenTofu requires a literal here, so this can't
+  # be toggled per environment. To deliberately tear down a sandbox
+  # that enabled FSx, flip this to false locally first.
   lifecycle {
-    prevent_destroy = var.protect_persistent_data
+    prevent_destroy = true
   }
 
   tags = merge(local.tags, { Name = local.data_bucket })
@@ -99,8 +102,9 @@ resource "aws_fsx_lustre_file_system" "data" {
   # per_unit_storage_throughput applies to PERSISTENT_* only.
   per_unit_storage_throughput = startswith(var.fsx_deployment_type, "PERSISTENT_") ? var.fsx_throughput_per_unit_storage : null
 
+  # Always protected — see aws_s3_bucket.data above.
   lifecycle {
-    prevent_destroy = var.protect_persistent_data
+    prevent_destroy = true
   }
 
   tags = merge(local.tags, { Name = "${local.name}-fsx" })
@@ -126,8 +130,9 @@ resource "aws_fsx_data_repository_association" "data" {
 
   batch_import_meta_data_on_create = true
 
+  # Always protected — see aws_s3_bucket.data above.
   lifecycle {
-    prevent_destroy = var.protect_persistent_data
+    prevent_destroy = true
   }
 
   tags = merge(local.tags, { Name = "${local.name}-fsx-s3" })

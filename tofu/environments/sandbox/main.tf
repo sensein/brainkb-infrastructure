@@ -19,6 +19,4 @@ module "brainkb" {
   dns_allow_overwrite = var.dns_allow_overwrite
 
   enable_fsx = var.enable_fsx
-
-  protect_persistent_data = false
 }
