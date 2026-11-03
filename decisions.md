@@ -184,6 +184,12 @@ only when we want automatic rotation (probably: RDS credentials if/when we adopt
 (`MONGO_DB_URL` embedded password; `CHAT_SERVICE_JWT_SECRET_KEY`) should rotate as part of
 moving them into SSM, not after.
 
+**In use for the sandbox (2026-11-03).** The tofu sandbox's secrets are
+SSM SecureString parameters under `/brainkb/sandbox/{backend,ui}/<KEY>`,
+read by `pyinfra/deploy.py` at deploy time (see `pyinfra/README.md`).
+Production isn't moved yet; the rotation note above still applies when it
+is.
+
 ### 9. CI/CD: laptop-driven or GitHub Actions
 
 Repo already has `sandbox-deploy.yml` and `production-deploy.yml`. The summary is silent
