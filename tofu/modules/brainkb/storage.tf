@@ -53,9 +53,10 @@ resource "aws_s3_bucket_public_access_block" "data" {
   restrict_public_buckets = true
 }
 
-# FSx security group — Lustre client protocol from the app SG only.
-# App SG's existing "all egress" rule already permits outbound to
-# FSx; no reverse rules needed here.
+# FSx security group. Lustre needs its ports (988, 1018-1023) open in
+# both directions between the file servers and their clients, and among
+# the file servers themselves; FSx refuses to create the file system
+# without the self-referencing rules.
 resource "aws_security_group" "fsx" {
   count = var.enable_fsx ? 1 : 0
 
@@ -90,6 +91,63 @@ resource "aws_vpc_security_group_ingress_rule" "fsx_from_app_1018_1023" {
   tags                         = local.tags
 }
 
+locals {
+  lustre_ports = {
+    "988"       = { from = 988, to = 988 }
+    "1018-1023" = { from = 1018, to = 1023 }
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "fsx_from_self" {
+  for_each = var.enable_fsx ? local.lustre_ports : {}
+
+  security_group_id            = aws_security_group.fsx[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.from
+  to_port                      = each.value.to
+  referenced_security_group_id = aws_security_group.fsx[0].id
+  description                  = "Lustre (${each.key}) between FSx file servers"
+  tags                         = local.tags
+}
+
+resource "aws_vpc_security_group_egress_rule" "fsx_to_self" {
+  for_each = var.enable_fsx ? local.lustre_ports : {}
+
+  security_group_id            = aws_security_group.fsx[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.from
+  to_port                      = each.value.to
+  referenced_security_group_id = aws_security_group.fsx[0].id
+  description                  = "Lustre (${each.key}) between FSx file servers"
+  tags                         = local.tags
+}
+
+resource "aws_vpc_security_group_egress_rule" "fsx_to_app" {
+  for_each = var.enable_fsx ? local.lustre_ports : {}
+
+  security_group_id            = aws_security_group.fsx[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.from
+  to_port                      = each.value.to
+  referenced_security_group_id = aws_security_group.app.id
+  description                  = "Lustre (${each.key}) to the app host"
+  tags                         = local.tags
+}
+
+# The app SG's "all egress" rule covers client-to-server traffic; this is
+# the server-to-client direction (production's SG has the same pair).
+resource "aws_vpc_security_group_ingress_rule" "app_from_fsx" {
+  for_each = var.enable_fsx ? local.lustre_ports : {}
+
+  security_group_id            = aws_security_group.app.id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.from
+  to_port                      = each.value.to
+  referenced_security_group_id = aws_security_group.fsx[0].id
+  description                  = "Lustre (${each.key}) from FSx"
+  tags                         = local.tags
+}
+
 resource "aws_fsx_lustre_file_system" "data" {
   count = var.enable_fsx ? 1 : 0
 
@@ -111,7 +169,8 @@ resource "aws_fsx_lustre_file_system" "data" {
 }
 
 # The S3 mirror. Deletion propagation is intentionally conservative
-# (import/export events omit DELETED) — see decisions.md §2.
+# (import/export events omit DELETED) — see decisions.md §2. Data
+# repository associations need a PERSISTENT_2 file system.
 resource "aws_fsx_data_repository_association" "data" {
   count = var.enable_fsx ? 1 : 0
 

@@ -121,7 +121,7 @@ variable "fsx_storage_capacity_gb" {
 }
 
 variable "fsx_deployment_type" {
-  description = "FSx for Lustre deployment type. SCRATCH_2 (cheaper, single-AZ, temporary storage) for sandbox testing; PERSISTENT_2 (multi-AZ, backups) for production."
+  description = "FSx for Lustre deployment type. PERSISTENT_2 is required for the S3 data repository association in storage.tf; SCRATCH_2 has no replication and doesn't support it."
   type        = string
   default     = "SCRATCH_2"
 
