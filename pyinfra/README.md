@@ -97,6 +97,15 @@ From anywhere in the repo:
 PyInfra first lists what would change on the server and asks before
 doing it. Add `-y` to skip the question.
 
+Reading that list: plain shell steps (installs, checkouts, builds,
+checks) always count as a change, because PyInfra can't predict them;
+each one skips itself when there's nothing to do. "Write the backend
+.env" showing `-` means the stored secrets match what's on the server.
+"Write the UI .env.local" can show `-` in the preview but still report a
+change: the brainkb-ui checkout step restores the repo's committed copy
+of that tracked file before pulling, and the write step then puts ours
+back. The content ends up the same.
+
 Options (`--data key=value`, repeatable):
 
 | Option | Default | Use |
