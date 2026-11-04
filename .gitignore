@@ -26,3 +26,7 @@ override.tf.json
 # PyInfra: local secrets and the generated SSH config (see pyinfra/README.md)
 pyinfra/secrets/
 pyinfra/.ssh_config
+
+# Python bytecode
+__pycache__/
+*.pyc
