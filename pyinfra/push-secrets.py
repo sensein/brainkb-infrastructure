@@ -25,32 +25,40 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PREFIX = "/brainkb/sandbox"
 REGION = os.environ.get("AWS_REGION", "us-east-2")
 
 
-def aws(*args, stdin=None):
-    return subprocess.run(
+def aws(*args):
+    result = subprocess.run(
         ["aws", *args, "--region", REGION],
-        input=stdin,
-        check=True,
         capture_output=True,
         text=True,
-    ).stdout
+    )
+    if result.returncode != 0:
+        # Show the CLI's own message (expired login, access denied, bad
+        # input). It goes to your terminal only.
+        sys.exit(f"aws {' '.join(args[:2])} failed (exit {result.returncode}):\n{result.stderr.strip()}")
+    return result.stdout
 
 
 def put(kind, key, value):
-    # The value goes in as JSON on stdin rather than as a command-line
-    # argument, so it doesn't show up in the process list.
+    # The value goes in through a private temporary file rather than as a
+    # command-line argument, so it doesn't show up in the process list.
     request = {
         "Name": f"{PREFIX}/{kind}/{key}",
         "Value": value,
         "Type": "SecureString",
         "Overwrite": True,
     }
-    aws("ssm", "put-parameter", "--cli-input-json", "file:///dev/stdin", stdin=json.dumps(request))
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "request.json"
+        path.touch(mode=0o600)
+        path.write_text(json.dumps(request))
+        aws("ssm", "put-parameter", "--cli-input-json", f"file://{path}")
 
 
 def read_env(path):

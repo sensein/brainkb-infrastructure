@@ -112,10 +112,11 @@ def read_ssm(path):
             "--query", "Parameters[].[Name,Value]",
             "--output", "json",
         ],
-        check=True,
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"Reading {path} from SSM failed:\n{result.stderr.strip()}")
     return {name.rsplit("/", 1)[1]: value for name, value in json.loads(result.stdout)}
 
 
