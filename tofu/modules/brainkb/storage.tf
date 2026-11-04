@@ -174,8 +174,11 @@ resource "aws_fsx_lustre_file_system" "data" {
 resource "aws_fsx_data_repository_association" "data" {
   count = var.enable_fsx ? 1 : 0
 
+  # data_repository_path has no trailing slash: AWS stores it without
+  # one, and any difference forces a replacement (which prevent_destroy
+  # blocks).
   file_system_id       = aws_fsx_lustre_file_system.data[0].id
-  data_repository_path = "s3://${aws_s3_bucket.data[0].id}/"
+  data_repository_path = "s3://${aws_s3_bucket.data[0].id}"
   file_system_path     = "/"
 
   s3 {
