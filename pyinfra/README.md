@@ -16,6 +16,7 @@ command deploys new code, and also rebuilds a fresh instance from nothing.
 | `ssh-via-ssm.sh` | Connects without port 22 (see "How it connects") |
 | `push-secrets.py` | Stores secrets in SSM Parameter Store (see "Secrets") |
 | `fetch-secrets.sh` | One-time copy of the env files already on the server |
+| `copy-old-graph.sh` | One-time copy of the old sandbox's graph data (see "Copying the old sandbox's graph data") |
 | `secrets/` | Optional local secrets, only for the one-time move or `secrets_source=local`. Gitignored; never commit it. |
 
 ## One-time setup on your laptop
@@ -143,6 +144,32 @@ mounted. After Ubuntu installs a new kernel and the server reboots,
 re-run the deploy to install the matching module.
 
 Without FSx, Oxigraph uses a Docker named volume on the server's disk.
+
+### Copying the old sandbox's graph data
+
+The old sandbox (sandbox.brainkb.org, sharing the production host) keeps
+its graph data on that host's disk. `copy-old-graph.sh` copies it into
+the tofu sandbox's Oxigraph, in two steps:
+
+    pyinfra/copy-old-graph.sh export
+    pyinfra/copy-old-graph.sh import old-sandbox-<date>.nq.gz   # the name export prints
+
+`export` counts the old sandbox's records and streams the whole store, as
+gzipped N-Quads, to `s3://<data bucket>/migrations/`. It only reads: the
+old sandbox keeps running, and nothing is written on the production host.
+The file then shows up on FSx at `/fsx/migrations/`, and stays in S3 as a
+backup.
+
+`import` checks the new Oxigraph is empty, loads the file, and checks the
+record counts match. It refuses to load into a non-empty store, because
+blank nodes would be duplicated; `FORCE=1` overrides that.
+
+Both steps reach Oxigraph directly on each host's
+`brainkb-sandbox-network` with a throwaway `curlimages/curl` container,
+so no Oxigraph password is involved. The production host is reached over
+SSH on its public IP (it has port 22 open and no SSM role), with a
+60-second key from EC2 Instance Connect, the same as `ssh-via-ssm.sh`
+does for the sandbox.
 
 ## How it connects
 
