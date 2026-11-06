@@ -37,8 +37,40 @@ INFRA_DIR = f"{WORKSPACE}/brainkb-infrastructure"
 BACKEND_DIR = f"{WORKSPACE}/BrainKB"
 UI_DIR = f"{WORKSPACE}/brainkb-ui"
 
+
+
+def local_commit():
+    """The commit this checkout is on, which the server then checks out too.
+
+    deploy.py and the env templates are read from this checkout, while the
+    compose file is used from the server's. Pinning the server to the same
+    commit keeps them in step, so the deploy stops if that commit can't be
+    reproduced there: uncommitted changes to tracked files, or a commit
+    that isn't on GitHub yet.
+    """
+    def git(*args):
+        return subprocess.run(["git", "-C", str(REPO_ROOT), *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    if git("status", "--porcelain", "--untracked-files=no"):
+        raise SystemExit(
+            "This checkout has uncommitted changes. Commit and push them (or stash them) "
+            "first, so the server runs the same files as this deploy."
+        )
+    commit = git("rev-parse", "HEAD")
+    git("fetch", "--quiet", "origin")
+    if not git("branch", "--remotes", "--contains", commit):
+        raise SystemExit(
+            f"Commit {commit[:12]} isn't on GitHub yet. Push it first, so the server "
+            "can check out the same commit as this deploy."
+        )
+    return commit
+
+
+INFRA_COMMIT = local_commit()
+
 REPOS = [
-    ("https://github.com/sensein/brainkb-infrastructure.git", INFRA_DIR, host.data.get("infra_branch", "main")),
+    ("https://github.com/sensein/brainkb-infrastructure.git", INFRA_DIR, INFRA_COMMIT),
     ("https://github.com/sensein/BrainKB.git", BACKEND_DIR, host.data.get("brainkb_branch", "main")),
     ("https://github.com/sensein/brainkb-ui.git", UI_DIR, host.data.get("ui_branch", "main")),
 ]
@@ -269,11 +301,17 @@ for url, path, branch in REPOS:
         # before pulling so a pull can't conflict with ours; ours is
         # written again below.
         commands.append(f"cd {path} && (git checkout -- .env.local 2>/dev/null || true)")
-    commands.append(
-        f"cd {path} && git fetch --quiet origin && git checkout --quiet {branch} "
-        f"&& git pull --quiet --ff-only origin {branch}"
-    )
-    server.shell(name=f"Check out {Path(path).name} at {branch}", commands=commands)
+    if path == INFRA_DIR:
+        # A commit, not a branch: the one this deploy is running from.
+        commands.append(f"cd {path} && git fetch --quiet origin && git checkout --quiet --detach {branch}")
+        label = branch[:12]
+    else:
+        commands.append(
+            f"cd {path} && git fetch --quiet origin && git checkout --quiet {branch} "
+            f"&& git pull --quiet --ff-only origin {branch}"
+        )
+        label = branch
+    server.shell(name=f"Check out {Path(path).name} at {label}", commands=commands)
 
 # ---- Settings --------------------------------------------------------------
 
