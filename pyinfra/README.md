@@ -103,6 +103,9 @@ server's copy supplies `docker-compose.yml`, so the two have to match.
 The deploy stops before doing anything if your checkout has uncommitted
 changes to tracked files, or if its commit isn't pushed to GitHub. To
 deploy a different version of this repo, check it out locally first.
+If your branch is behind its copy on GitHub (usually a forgotten
+`git pull`), it says by how many commits and asks before deploying the
+older version.
 
 Reading that list: plain shell steps (installs, checkouts, builds,
 checks) always count as a change, because PyInfra can't predict them;

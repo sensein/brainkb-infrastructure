@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from pyinfra import host
@@ -64,6 +65,24 @@ def local_commit():
             f"Commit {commit[:12]} isn't on GitHub yet. Push it first, so the server "
             "can check out the same commit as this deploy."
         )
+
+    # Pushed but out of date: the usual cause is a forgotten `git pull`,
+    # which would put the server back on an older version. Ask first.
+    try:
+        upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    except subprocess.CalledProcessError:
+        upstream = None  # detached HEAD or no tracking branch: nothing to compare
+    if upstream:
+        behind = int(git("rev-list", "--count", f"HEAD..{upstream}"))
+        if behind:
+            print(
+                f"Your checkout is {behind} commit{'s' if behind > 1 else ''} behind "
+                f"{upstream} (run `git pull` to update)."
+            )
+            if not sys.stdin.isatty():
+                raise SystemExit("Stopping: can't ask whether to continue without a terminal.")
+            if input("Deploy this older version anyway? [y/N] ").strip().lower() not in ("y", "yes"):
+                raise SystemExit("Stopped. Nothing was changed on the server.")
     return commit
 
 
