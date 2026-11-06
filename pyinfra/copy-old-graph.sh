@@ -99,11 +99,31 @@ do_import() {
   echo "2/4 Waiting for the file to appear on FSx (synced from S3)..."
   sandbox "for i in \$(seq 1 30); do [ -s $file ] && exit 0; sleep 10; done; echo 'not on /fsx after 5 minutes' >&2; exit 1"
 
-  echo "3/4 Loading $expected records (large stores can take a while)..."
-  sandbox "zcat $file | $in_network -X POST -T - -H 'Content-Type: application/n-quads' $oxigraph/store"
+  # Oxigraph's offline bulk loader, not a POST to /store: a POST loads in
+  # one transaction held in memory, which a 4 GB instance can't do for
+  # millions of records. The loader needs the database to itself, so
+  # Oxigraph is stopped while it runs (graph queries on the sandbox fail
+  # meanwhile) and started again afterwards, even if the load fails.
+  # --non-atomic writes as it goes, which keeps memory and disk use down.
+  echo "3/4 Loading $expected records with Oxigraph stopped (large stores can take a while)..."
+  sandbox "ctr=brainkb-oxigraph-sandbox
+    data=\$(sudo docker inspect \$ctr --format '{{range .Mounts}}{{if eq .Destination \"/data\"}}{{.Source}}{{end}}{{end}}')
+    image=\$(sudo docker inspect \$ctr --format '{{.Config.Image}}')
+    [ -n \"\$data\" ] || { echo 'no /data mount on the Oxigraph container' >&2; exit 1; }
+    sudo docker stop \$ctr >/dev/null
+    zcat $file | sudo docker run --rm -i -v \"\$data\":/data \"\$image\" load --location /data --format nq --non-atomic --lenient
+    status=\$?
+    sudo docker start \$ctr >/dev/null
+    exit \$status"
 
   echo "4/4 Comparing counts..."
-  after="$(sandbox "$remote_count")"
+  after=""
+  for _ in $(seq 1 30); do # Oxigraph takes a moment to open the store
+    after="$(sandbox "$remote_count" 2>/dev/null || true)"
+    [[ "$after" =~ ^[0-9]+$ ]] && break
+    sleep 5
+  done
+  [[ "$after" =~ ^[0-9]+$ ]] || die "Oxigraph didn't answer after the load; check: sudo docker logs brainkb-oxigraph-sandbox"
   echo "    old sandbox: $expected   new sandbox: $after"
   # Records already there that are also in the export aren't added twice,
   # so with a non-empty store anywhere from expected - before to expected

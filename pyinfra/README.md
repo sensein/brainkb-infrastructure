@@ -160,12 +160,16 @@ old sandbox keeps running, and nothing is written on the production host.
 The file then shows up on FSx at `/fsx/migrations/`, and stays in S3 as a
 backup.
 
-`import` checks the new Oxigraph is empty, loads the file, and checks the
-record counts match. It refuses to load into a non-empty store, because
+`import` checks the new Oxigraph is empty, loads the file with Oxigraph's
+bulk loader (`oxigraph load`), and checks the record counts match. The
+bulk loader needs the database to itself, so the sandbox's Oxigraph is
+stopped while it runs and started again afterwards. Loading through the
+HTTP API instead holds the whole load in memory, which a 4 GB instance
+can't do for the old sandbox's ~23 million records. It refuses to load into a non-empty store, because
 a second import would duplicate blank nodes; `FORCE=1` overrides that
 (fine when the only records are the few the backend writes at startup).
 
-Both steps reach Oxigraph directly on each host's
+The export and the record counts reach Oxigraph directly on each host's
 `brainkb-sandbox-network` with a throwaway `curlimages/curl` container,
 so no Oxigraph password is involved. The production host is reached over
 SSH on its public IP (it has port 22 open and no SSM role), with a
