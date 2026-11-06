@@ -6,6 +6,11 @@
 #   pyinfra/copy-old-graph.sh export         # old sandbox -> S3 (read only)
 #   pyinfra/copy-old-graph.sh import <name>  # S3 / FSx -> new sandbox
 #
+# The app's Postgres database (users, spaces and which graphs belong to
+# them, permissions, jobs) is separate and copied in one step:
+#
+#   pyinfra/copy-old-graph.sh postgres       # replaces the new sandbox's DB
+#
 # Both talk to Oxigraph directly on each host's brainkb-sandbox-network
 # (a throwaway curl container), so no Oxigraph password is needed and the
 # nginx upload limits don't apply. The old sandbox is only read: the export
@@ -139,8 +144,60 @@ do_import() {
   fi
 }
 
+# Postgres: pg_dump of the old sandbox's app database (read only), via S3
+# so a copy is kept, then pg_restore --clean into the new one. The backend
+# container is stopped during the restore so nothing writes meanwhile, and
+# started again afterwards even if the restore fails. --single-transaction
+# makes a failed restore leave the new database as it was.
+pg_ctr="brainkb-postgres-sandbox"
+backend_ctr="brainkb-unified-sandbox"
+psql_in="sudo docker exec -i $pg_ctr sh -c"
+pg_counts="$psql_in 'psql -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -tA -F \" \" -c \"select (select count(*) from spaces), (select count(*) from space_graphs)\"'"
+
+do_postgres() {
+  local bucket name old new answer
+  bucket="$(tofu_out data_bucket_name)"
+  name="old-sandbox-postgres-$(date -u +%Y%m%d-%H%M%S).dump"
+
+  echo "1/5 Counting spaces on both sandboxes..."
+  old="$(prod "$pg_counts")"
+  [[ "$old" =~ ^[0-9]+\ [0-9]+$ ]] || die "couldn't count spaces on the old sandbox (got: $old)"
+  new="$(sandbox "$pg_counts")"
+  echo "    old sandbox: $(set -- $old; echo "$1 spaces, $2 graphs in spaces")"
+  echo "    new sandbox: $(set -- $new; echo "$1 spaces, $2 graphs in spaces")"
+
+  echo
+  echo "This replaces the new sandbox's database (users, spaces, permissions, jobs)"
+  echo "with a copy of the old sandbox's. The old sandbox is only read."
+  read -r -p "Type yes to continue: " answer </dev/tty
+  [ "$answer" = yes ] || die "stopped; nothing was changed"
+
+  echo "2/5 Dumping the old sandbox's database to s3://$bucket/$prefix/$name..."
+  prod "$psql_in 'pg_dump -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" -Fc'" \
+    | aws s3 cp - "s3://$bucket/$prefix/$name" --region "$region"
+  aws s3 ls "s3://$bucket/$prefix/$name" --region "$region" --human-readable
+
+  echo "3/5 Waiting for the file to appear on FSx..."
+  local file="/fsx/$prefix/$name"
+  sandbox "for i in \$(seq 1 30); do [ -s $file ] && exit 0; sleep 10; done; echo 'not on /fsx after 5 minutes' >&2; exit 1"
+
+  echo "4/5 Restoring it with the backend stopped..."
+  sandbox "sudo docker stop $backend_ctr >/dev/null
+    $psql_in 'pg_restore -U \"\$POSTGRES_USER\" -d \"\$POSTGRES_DB\" --clean --if-exists --no-owner --no-privileges --single-transaction' < $file
+    status=\$?
+    sudo docker start $backend_ctr >/dev/null
+    exit \$status"
+
+  echo "5/5 Comparing counts..."
+  new="$(sandbox "$pg_counts")"
+  echo "    old sandbox: $old   new sandbox: $new   (spaces, graphs in spaces)"
+  [ "$new" = "$old" ] || die "counts differ"
+  echo "Done: the counts match. The backend takes a minute or two to start."
+}
+
 case "${1:-}" in
   export) do_export ;;
   import) shift; do_import "$@" ;;
-  *) die "usage: $0 export | $0 import <name>" ;;
+  postgres) do_postgres ;;
+  *) die "usage: $0 export | $0 import <name> | $0 postgres" ;;
 esac

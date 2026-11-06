@@ -169,6 +169,20 @@ can't do for the old sandbox's ~23 million records. It refuses to load into a no
 a second import would duplicate blank nodes; `FORCE=1` overrides that
 (fine when the only records are the few the backend writes at startup).
 
+The graphs also have to be registered in the app's Postgres database
+(spaces, which graphs belong to them, members and permissions); without
+that the UI says "graph is not part of any space". Copy the old
+sandbox's whole app database with:
+
+    pyinfra/copy-old-graph.sh postgres
+
+It shows the space counts on both sides and asks for `yes`, because it
+**replaces** the new sandbox's database (users, spaces, permissions,
+jobs). It dumps the old database (`pg_dump`, read only) to the same S3
+folder, stops the new sandbox's backend, restores the dump
+(`pg_restore --clean --single-transaction`, so a failure changes
+nothing), starts the backend again and compares the counts.
+
 The export and the record counts reach Oxigraph directly on each host's
 `brainkb-sandbox-network` with a throwaway `curlimages/curl` container,
 so no Oxigraph password is involved. The production host is reached over
