@@ -13,6 +13,8 @@ Usage (from anywhere in the repo; see pyinfra/README.md):
 """
 
 import io
+import json
+import os
 import re
 import subprocess
 import sys
@@ -23,6 +25,12 @@ from pyinfra.operations import apt, files, server
 
 REPO_ROOT = Path(host.data.repo_root)
 SECRETS = REPO_ROOT / "pyinfra" / "secrets"
+# Secrets live in SSM Parameter Store under this prefix, one SecureString
+# per key: /brainkb/sandbox/backend/<KEY> and /brainkb/sandbox/ui/<KEY>.
+# --data secrets_source=local reads pyinfra/secrets/*.env instead.
+SSM_PREFIX = host.data.get("ssm_prefix", "/brainkb/sandbox")
+SECRETS_SOURCE = host.data.get("secrets_source", "ssm")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-2")
 HOSTNAME = host.data.public_hostname  # test.brainkb.org
 
 WORKSPACE = "/home/ubuntu/sandbox-workspace"
@@ -137,26 +145,59 @@ def render_env(template, values):
             out.append(line)
     extra = [key for key in values if key not in used]
     if extra:
-        out += ["", "# ---- Not in the template (from pyinfra/secrets) ----"]
+        out += ["", "# ---- Not in the template (from the secrets store) ----"]
         out += [f"{key}={values[key]}" for key in extra]
     return "\n".join(out) + "\n"
 
 
-def load_secrets(name):
-    path = SECRETS / name
-    if not path.exists():
+def read_ssm(path):
+    """KEY -> value for every parameter under `path`, decrypted. Runs on the
+    machine running pyinfra, with its AWS credentials."""
+    result = subprocess.run(
+        [
+            "aws", "ssm", "get-parameters-by-path",
+            "--region", AWS_REGION,
+            "--path", path,
+            "--recursive",
+            "--with-decryption",
+            "--query", "Parameters[].[Name,Value]",
+            "--output", "json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Reading {path} from SSM failed:\n{result.stderr.strip()}")
+    return {name.rsplit("/", 1)[1]: value for name, value in json.loads(result.stdout)}
+
+
+def load_secrets(kind):
+    """Secrets for `kind` ("backend" or "ui") from SSM, or from
+    pyinfra/secrets/<kind>.env with --data secrets_source=local."""
+    if SECRETS_SOURCE == "local":
+        path = SECRETS / f"{kind}.env"
+        if not path.exists():
+            raise RuntimeError(f"{path} is missing; see pyinfra/README.md, 'Secrets'.")
+        return read_env(path)
+    path = f"{SSM_PREFIX}/{kind}/"
+    values = read_ssm(path)
+    if not values:
         raise RuntimeError(
-            f"{path} is missing. Create it before deploying; see pyinfra/README.md, 'Secrets'."
+            f"No parameters under {path} in SSM ({AWS_REGION}). Load them with "
+            f"pyinfra/push-secrets.py; see pyinfra/README.md, 'Secrets'."
         )
-    return read_env(path)
+    return values
 
 
-backend_values = {**load_secrets("backend.env"), **BACKEND_SETTINGS}
+backend_values = {**load_secrets("backend"), **BACKEND_SETTINGS}
 backend_env = render_env((REPO_ROOT / "sandbox" / "backend.env.template").read_text(), backend_values)
 
-ui_secrets = load_secrets("ui.env")
+ui_secrets = load_secrets("ui")
 if not ui_secrets.get("NEXTAUTH_SECRET"):
-    raise RuntimeError("NEXTAUTH_SECRET is empty in pyinfra/secrets/ui.env. Generate one with: openssl rand -base64 32")
+    raise RuntimeError(
+        "NEXTAUTH_SECRET is missing from the UI secrets. Set one with: "
+        "pyinfra/push-secrets.py ui --set NEXTAUTH_SECRET  (generate it with: openssl rand -base64 32)"
+    )
 ui_template = (
     (REPO_ROOT / "sandbox" / "ui.env.template")
     .read_text()

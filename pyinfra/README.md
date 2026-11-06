@@ -14,8 +14,9 @@ command deploys new code, and also rebuilds a fresh instance from nothing.
 | `inventory.py` | Finds the instance from `tofu output` |
 | `deploy.py` | The setup steps |
 | `ssh-via-ssm.sh` | Connects without port 22 (see "How it connects") |
+| `push-secrets.py` | Stores secrets in SSM Parameter Store (see "Secrets") |
 | `fetch-secrets.sh` | One-time copy of the env files already on the server |
-| `secrets/` | Your local secrets. Gitignored; never commit it. |
+| `secrets/` | Optional local secrets, only for the one-time move or `secrets_source=local`. Gitignored; never commit it. |
 
 ## One-time setup on your laptop
 
@@ -43,28 +44,49 @@ command deploys new code, and also rebuilds a fresh instance from nothing.
 
 ## Secrets
 
-The deploy reads two files that you keep locally:
+Secrets live in **AWS SSM Parameter Store**, one encrypted `SecureString`
+parameter per key, so nobody needs a secrets file:
 
-- `pyinfra/secrets/backend.env`: values for the backend `.env`
-  (passwords, JWT secrets, API keys).
-- `pyinfra/secrets/ui.env`: values for the UI `.env.local`. Only
-  `NEXTAUTH_SECRET` is required.
+- `/brainkb/sandbox/backend/<KEY>` for the backend `.env` (passwords, JWT
+  secrets, API keys, OAuth client IDs and secrets)
+- `/brainkb/sandbox/ui/<KEY>` for the UI `.env.local` (only
+  `NEXTAUTH_SECRET` is required)
 
-Each is `KEY=value` lines. They're merged into `sandbox/backend.env.template`
-and `sandbox/ui.env.template`. Ports, the `test.*` URLs, `CORS_ALLOWED_ORIGINS`
-and the Oxigraph paths are always set by `deploy.py`, so it doesn't matter
-if the secrets files still carry the co-tenant sandbox's values.
+`deploy.py` reads them with your AWS credentials when you run it, merges
+them into `sandbox/backend.env.template` and `sandbox/ui.env.template`, and
+writes the result to the server. Ports, the `test.*` URLs,
+`CORS_ALLOWED_ORIGINS` and the Oxigraph paths are always set by
+`deploy.py`, so stored values for those don't matter.
 
-The sandbox was first set up by hand, so the easiest start is to copy its
-current env files down:
+Day to day, use `push-secrets.py`:
 
-    pyinfra/fetch-secrets.sh
+    pyinfra/push-secrets.py backend --list                     # key names (never values)
+    pyinfra/push-secrets.py backend --set GLOBUS_CLIENT_SECRET # prompts for the value
 
-For a brand-new setup, write the two files by hand instead. Generate the
-session key with `openssl rand -base64 32`.
+Then re-run the deploy (`--data build_ui=false` if only backend values
+changed). Avoid `aws ssm put-parameter --value ...` for secrets: it leaves
+the value in your shell history.
 
-A later change moves these into AWS SSM Parameter Store
-(`decisions.md` §8), so nobody needs local files.
+**One-time move from local files.** For a server that was set up by hand,
+or if you already have `pyinfra/secrets/*.env`:
+
+    pyinfra/fetch-secrets.sh                                   # copies the server's env files down
+    pyinfra/push-secrets.py backend pyinfra/secrets/backend.env
+    pyinfra/push-secrets.py ui pyinfra/secrets/ui.env
+    rm -r pyinfra/secrets                                      # no longer needed
+
+Empty values are skipped (SSM doesn't store empty strings; they render as
+the template's blank default). For a brand-new setup, store each key with
+`--set`. Generate the session key with `openssl rand -base64 32`.
+
+To deploy from local files instead (offline, or before the parameters
+exist), add `--data secrets_source=local`; it reads
+`pyinfra/secrets/backend.env` and `ui.env`.
+
+Who can read them: anyone whose AWS role allows `ssm:GetParameter*` on
+`/brainkb/sandbox/*` and `kms:Decrypt` on the default `aws/ssm` key. The
+SSO AdministratorAccess role can. Standard parameters with the AWS-managed
+key are free.
 
 ## Run it
 
@@ -84,6 +106,15 @@ deploy a different version of this repo, check it out locally first.
 If your branch is behind its copy on GitHub (usually a forgotten
 `git pull`), it says by how many commits and asks before deploying the
 older version.
+
+Reading that list: plain shell steps (installs, checkouts, builds,
+checks) always count as a change, because PyInfra can't predict them;
+each one skips itself when there's nothing to do. "Write the backend
+.env" showing `-` means the stored secrets match what's on the server.
+"Write the UI .env.local" can show `-` in the preview but still report a
+change: the brainkb-ui checkout step restores the repo's committed copy
+of that tracked file before pulling, and the write step then puts ours
+back. The content ends up the same.
 
 Options (`--data key=value`, repeatable):
 
