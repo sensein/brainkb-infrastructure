@@ -7,9 +7,10 @@ co-tenant sandbox on production's EC2 (`sandbox.brainkb.org`, described
 in `README.md` and `notes.md`) is a different deployment and keeps
 running unchanged.
 
-Written 2026-11-02, right after the first `tofu apply`. Nothing below
-has been run on the new server yet, so expect to adjust it the first
-time through. Update this file when you do.
+Written 2026-11-02 and walked through by hand the same day. Steps 2–6
+are automated in `../pyinfra/` (`pyinfra pyinfra/inventory.py
+pyinfra/deploy.py`); this file stays as the explanation of what that
+does, and the fallback for doing it by hand.
 
 ## How this differs from the co-tenant sandbox
 
