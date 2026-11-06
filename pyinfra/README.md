@@ -75,13 +75,19 @@ From anywhere in the repo:
 PyInfra first lists what would change on the server and asks before
 doing it. Add `-y` to skip the question.
 
+The server runs this repo at the **same commit as your checkout**:
+`deploy.py` writes the env files from your local templates, and the
+server's copy supplies `docker-compose.yml`, so the two have to match.
+The deploy stops before doing anything if your checkout has uncommitted
+changes to tracked files, or if its commit isn't pushed to GitHub. To
+deploy a different version of this repo, check it out locally first.
+
 Options (`--data key=value`, repeatable):
 
 | Option | Default | Use |
 |---|---|---|
 | `brainkb_branch` | `main` | Deploy a BrainKB branch |
 | `ui_branch` | `main` | Deploy a brainkb-ui branch |
-| `infra_branch` | `main` | Branch of this repo checked out on the server (compose file) |
 | `build_ui` | `true` | `false` skips the UI rebuild, which takes ~10 minutes |
 
 For example:
