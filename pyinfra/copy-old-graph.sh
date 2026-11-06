@@ -105,13 +105,15 @@ do_import() {
   # Oxigraph is stopped while it runs (graph queries on the sandbox fail
   # meanwhile) and started again afterwards, even if the load fails.
   # --non-atomic writes as it goes, which keeps memory and disk use down.
+  # optimize then compacts the store for faster reads, as the loader advises.
   echo "3/4 Loading $expected records with Oxigraph stopped (large stores can take a while)..."
   sandbox "ctr=brainkb-oxigraph-sandbox
     data=\$(sudo docker inspect \$ctr --format '{{range .Mounts}}{{if eq .Destination \"/data\"}}{{.Source}}{{end}}{{end}}')
     image=\$(sudo docker inspect \$ctr --format '{{.Config.Image}}')
     [ -n \"\$data\" ] || { echo 'no /data mount on the Oxigraph container' >&2; exit 1; }
     sudo docker stop \$ctr >/dev/null
-    zcat $file | sudo docker run --rm -i -v \"\$data\":/data \"\$image\" load --location /data --format nq --non-atomic --lenient
+    zcat $file | sudo docker run --rm -i -v \"\$data\":/data \"\$image\" load --location /data --format nq --non-atomic --lenient &&
+      sudo docker run --rm -v \"\$data\":/data \"\$image\" optimize --location /data
     status=\$?
     sudo docker start \$ctr >/dev/null
     exit \$status"
