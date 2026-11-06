@@ -93,7 +93,7 @@ do_import() {
   before="$(sandbox "$remote_count")"
   [[ "$before" =~ ^[0-9]+$ ]] || die "couldn't count records on the new sandbox (got: $before)"
   if [ "$before" != 0 ] && [ "${FORCE:-}" != 1 ]; then
-    die "it already has $before records. Importing again would duplicate blank nodes. Re-run with FORCE=1 to add anyway."
+    die "it already has $before records. If you've imported before, doing it again would duplicate blank nodes. If not (a few records written by the backend at startup), re-run with FORCE=1."
   fi
 
   echo "2/4 Waiting for the file to appear on FSx (synced from S3)..."
@@ -105,8 +105,13 @@ do_import() {
   echo "4/4 Comparing counts..."
   after="$(sandbox "$remote_count")"
   echo "    old sandbox: $expected   new sandbox: $after"
+  # Records already there that are also in the export aren't added twice,
+  # so with a non-empty store anywhere from expected - before to expected
+  # new records is right.
   if [ "$((after - before))" = "$expected" ]; then
     echo "Done: the counts match."
+  elif [ "$after" -ge "$expected" ] && [ "$after" -le "$((before + expected))" ]; then
+    echo "Done: all $expected records are there ($((before + expected - after)) of them were already in the new store)."
   else
     die "counts differ: expected $expected more records, got $((after - before))"
   fi

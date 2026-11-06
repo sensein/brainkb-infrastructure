@@ -162,7 +162,8 @@ backup.
 
 `import` checks the new Oxigraph is empty, loads the file, and checks the
 record counts match. It refuses to load into a non-empty store, because
-blank nodes would be duplicated; `FORCE=1` overrides that.
+a second import would duplicate blank nodes; `FORCE=1` overrides that
+(fine when the only records are the few the backend writes at startup).
 
 Both steps reach Oxigraph directly on each host's
 `brainkb-sandbox-network` with a throwaway `curlimages/curl` container,
