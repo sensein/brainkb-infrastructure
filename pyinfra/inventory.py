@@ -35,6 +35,9 @@ _outputs = json.loads(
 )
 _instance_id = _outputs["instance_id"]["value"]
 _public_hostname = _outputs["app_hostnames"]["value"][0]  # test.brainkb.org
+# Both null when the sandbox runs without FSx (enable_fsx = false).
+_fsx_dns_name = _outputs["pyinfra"]["value"]["fsx_dns_name"]
+_fsx_mount_name = _outputs["pyinfra"]["value"]["fsx_mount_name"]
 
 _ssh_key = os.path.expanduser(os.environ.get("BRAINKB_SSH_KEY", "~/.ssh/id_ed25519"))
 # The ProxyCommand script inherits this to find the matching .pub.
@@ -58,6 +61,8 @@ sandbox = [
             "ssh_config_file": str(_ssh_config),
             "repo_root": str(_REPO_ROOT),
             "public_hostname": _public_hostname,
+            "fsx_dns_name": _fsx_dns_name,
+            "fsx_mount_name": _fsx_mount_name,
         },
     )
 ]

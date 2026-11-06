@@ -131,6 +131,28 @@ For example:
 The run ends by checking that all four backend services are `RUNNING` and
 that the UI answers 200 on port 3000. It fails if they don't.
 
+## FSx for Lustre
+
+When the sandbox has FSx (`enable_fsx = true` in
+`tofu/environments/sandbox/sandbox.tfvars`), `inventory.py` picks up its
+DNS and mount names from `tofu output`, and the deploy:
+
+1. adds AWS's FSx Lustre client apt repository,
+2. installs `lustre-client-modules-$(uname -r)`, the client built for the
+   **running kernel**,
+3. mounts the file system at `/fsx` (with an `/etc/fstab` entry, so it
+   comes back after a reboot), and
+4. points Oxigraph's data at `/fsx/oxigraph-db`. Temp files stay on a
+   local Docker volume.
+
+The Lustre client is a kernel module, so its version has to match the
+kernel. If AWS hasn't published a build for the running kernel yet, the
+install step stops with a message saying so, before anything is
+mounted. After Ubuntu installs a new kernel and the server reboots,
+re-run the deploy to install the matching module.
+
+Without FSx, Oxigraph uses a Docker named volume on the server's disk.
+
 ## How it connects
 
 The sandbox instance has no inbound SSH port (by design; see the tofu

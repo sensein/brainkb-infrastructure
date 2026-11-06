@@ -96,6 +96,13 @@ REPOS = [
 
 BUILD_UI = str(host.data.get("build_ui", True)).lower() not in ("false", "0", "no")
 
+# FSx for Lustre, when tofu provisions it (enable_fsx = true). Oxigraph's
+# data goes on it, as in production; without it, a Docker named volume.
+FSX_DNS_NAME = host.data.get("fsx_dns_name")
+FSX_MOUNT_NAME = host.data.get("fsx_mount_name")
+FSX_MOUNT_POINT = "/fsx"
+OXIGRAPH_DATA_DIR = f"{FSX_MOUNT_POINT}/oxigraph-db"
+
 # Values that differ from the co-tenant sandbox the templates were written
 # for. They're applied last, so they win over anything in the secrets files
 # (which may be copies of the co-tenant .env files).
@@ -108,9 +115,10 @@ BACKEND_SETTINGS = {
     "USERMANAGEMENT_PUBLIC_BASE_URL": f"https://usermanagement.{HOSTNAME}",
     "USERMANAGEMENT_FRONTEND_CALLBACK_URL": f"https://{HOSTNAME}/auth/callback",
     "CORS_ALLOWED_ORIGINS": f"https://{HOSTNAME}",
-    # Blank = Docker named volumes. The co-tenant .env points these at
-    # host directories that don't exist on this instance.
-    "OXIGRAPH_DATA_PATH": "",
+    # Data on FSx when there is one, else a Docker named volume (blank).
+    # Temp files stay on a local named volume either way. The co-tenant
+    # .env points these at host directories that don't exist here.
+    "OXIGRAPH_DATA_PATH": OXIGRAPH_DATA_DIR if FSX_DNS_NAME else "",
     "OXIGRAPH_TMP_PATH": "",
 }
 UI_SETTINGS = {
@@ -246,6 +254,62 @@ server.shell(
         "bash -c '. $HOME/.nvm/nvm.sh && nvm install 20 >/dev/null && (command -v pm2 >/dev/null || npm install -g pm2)'",
     ],
 )
+
+# ---- FSx for Lustre ---------------------------------------------------------
+# The Lustre client is a kernel module, built per kernel version: AWS
+# publishes lustre-client-modules-<kernel>. If the running kernel has no
+# build (a fresh kernel AWS hasn't caught up with), this stops before
+# mounting anything. After a kernel upgrade and reboot, re-run the deploy
+# to install the matching module.
+
+if FSX_DNS_NAME:
+    server.shell(
+        name="Add AWS's FSx Lustre client apt repository",
+        commands=[
+            "test -s /usr/share/keyrings/fsx-ubuntu-public-key.gpg || "
+            "curl -fsSL https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc "
+            "| gpg --dearmor -o /usr/share/keyrings/fsx-ubuntu-public-key.gpg",
+            ". /etc/os-release && echo \"deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] "
+            "https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu $VERSION_CODENAME main\" "
+            "> /etc/apt/sources.list.d/fsxlustreclientrepo.list",
+            "apt-get update -qq",
+        ],
+        _sudo=True,
+    )
+    server.shell(
+        name="Install the Lustre client for the running kernel",
+        commands=[
+            'pkg="lustre-client-modules-$(uname -r)"; '
+            'apt-cache show "$pkg" >/dev/null 2>&1 || '
+            '{ echo "No $pkg in the FSx client repo: AWS has no Lustre build for kernel $(uname -r) yet." >&2; exit 1; }; '
+            'DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg"'
+        ],
+        _sudo=True,
+    )
+    files.directory(
+        name=f"Create the {FSX_MOUNT_POINT} mount point",
+        path=FSX_MOUNT_POINT,
+        _sudo=True,
+    )
+    files.line(
+        name=f"Mount FSx at {FSX_MOUNT_POINT} on boot",
+        path="/etc/fstab",
+        line=rf"^{re.escape(FSX_DNS_NAME)}@tcp:/{FSX_MOUNT_NAME} ",
+        replace=(
+            f"{FSX_DNS_NAME}@tcp:/{FSX_MOUNT_NAME} {FSX_MOUNT_POINT} lustre "
+            "defaults,relatime,flock,_netdev,x-systemd.automount,x-systemd.requires=network.service 0 0"
+        ),
+        _sudo=True,
+    )
+    server.shell(
+        name=f"Mount FSx at {FSX_MOUNT_POINT}",
+        commands=[
+            f"mountpoint -q {FSX_MOUNT_POINT} || mount {FSX_MOUNT_POINT}",
+            f"mountpoint -q {FSX_MOUNT_POINT}",
+            f"mkdir -p {OXIGRAPH_DATA_DIR}",
+        ],
+        _sudo=True,
+    )
 
 # ---- Code ------------------------------------------------------------------
 
