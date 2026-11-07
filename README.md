@@ -98,8 +98,11 @@ From a laptop with AWS access (`aws sso login --profile sensein-sso`):
    (see `pyinfra/README.md`; add `--data build_ui=false` to skip the
    ten-minute UI build).
 
-Day to day, only step 2 is needed: it pulls the latest code and restarts
-what changed.
+Day to day, only step 2 is needed: it updates the app code and restarts
+what changed. The server runs this repo at the same commit as your
+checkout, so `git pull` first; the deploy stops if your changes aren't
+committed and pushed, and asks before deploying a checkout that's behind
+GitHub.
 
 ## Layout
 
