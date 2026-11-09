@@ -25,6 +25,26 @@ for cost/complexity reasons — Lustre is HPC-shaped and Oxigraph's I/O profile
 is not. Revisit once the tofu module for Lustre is in and we have real cost
 data. If we ever migrate, EFS or FSx for OpenZFS are the plausible targets.
 
+**Sandbox (decided 2026-11-04, team standup).** The OpenTofu sandbox
+(test.brainkb.org) gets FSx for Lustre too, with its **own** file system
+and S3 bucket (`sensein-brainkb-sandbox-data`), so it exercises the same
+storage path as production. This reverses the earlier view, recorded in
+`bootstrap.md` for the co-tenant sandbox, that FSx was more than a sandbox
+needs.
+
+- `PERSISTENT_2`, 1.2 TB: the smallest size FSx for Lustre offers. Data
+  repository associations (the S3 link) need `PERSISTENT_2`; `SCRATCH_2`
+  doesn't support them.
+- 125 MB/s/TiB throughput, LZ4 compression. About **$175/month** for the
+  file system, plus S3 storage.
+- Built by `tofu/modules/brainkb` (`enable_fsx = true` in
+  `sandbox.tfvars`) and mounted at `/fsx` by `pyinfra/deploy.py`.
+- Under review (#19): whether the live Oxigraph DB stays on FSx or moves
+  to the server's disk, with FSx holding stopped-snapshot backups, as
+  production's recovery runbook does. A reboot test on 2026-11-09 showed
+  the risk: while `/fsx` failed to mount, Docker hung and the instance
+  had to be rebooted from AWS.
+
 ---
 
 ## 2. Backup semantics for the graph store
@@ -54,6 +74,14 @@ It does **not** cover:
 Recording this so accepting it is a conscious choice. If those failure
 modes turn out to matter later, a periodic `oxigraph dump` to a separate
 versioned bucket is the cheap add-on.
+
+**Note (2026-11, from review of #19).** Leaving DELETED out of the FSx ↔ S3
+events only means a deleted file isn't deleted on the other side. A bad
+SPARQL DELETE changes files rather than deleting them, so it does reach
+S3. What covers it is S3 **versioning**, within the window its lifecycle
+rule keeps old versions (30 days for the sandbox bucket). Separately, a
+file-by-file copy of a running RocksDB store may not be restorable, which
+is why production backs up a stopped snapshot instead.
 
 ---
 
