@@ -31,6 +31,35 @@ resource "aws_s3_bucket_versioning" "data" {
   }
 }
 
+# Versioning is what protects against a bad write: a SPARQL DELETE or a
+# broken migration changes files, and S3 keeps the previous versions. This
+# rule keeps that from growing forever by expiring old versions after
+# var.data_bucket_noncurrent_version_days, and cleans up uploads that
+# never finished.
+resource "aws_s3_bucket_lifecycle_configuration" "data" {
+  count = var.enable_fsx ? 1 : 0
+
+  bucket = aws_s3_bucket.data[0].id
+
+  rule {
+    id     = "expire-old-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.data_bucket_noncurrent_version_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  # The rule applies to versions, so versioning has to be on first.
+  depends_on = [aws_s3_bucket_versioning.data]
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
   count = var.enable_fsx ? 1 : 0
 
@@ -168,8 +197,10 @@ resource "aws_fsx_lustre_file_system" "data" {
   tags = merge(local.tags, { Name = "${local.name}-fsx" })
 }
 
-# The S3 mirror. Deletion propagation is intentionally conservative
-# (import/export events omit DELETED) — see decisions.md §2. Data
+# The S3 mirror. The import/export events omit DELETED, so deleting a file
+# on one side doesn't delete it on the other. That doesn't protect against
+# a bad SPARQL DELETE, which changes files rather than deleting them; the
+# bucket's versioning (above) is what keeps the earlier copies. Data
 # repository associations need a PERSISTENT_2 file system.
 resource "aws_fsx_data_repository_association" "data" {
   count = var.enable_fsx ? 1 : 0
