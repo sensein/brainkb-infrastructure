@@ -155,10 +155,18 @@ DNS and mount names from `tofu output`, and the deploy:
    local Docker volume.
 
 The Lustre client is a kernel module, so its version has to match the
-kernel. If AWS hasn't published a build for the running kernel yet, the
-install step stops with a message saying so, before anything is
-mounted. After Ubuntu installs a new kernel and the server reboots,
-re-run the deploy to install the matching module.
+kernel. The deploy installs two packages:
+
+- `lustre-client-modules-$(uname -r)`, for the kernel running now. If
+  AWS hasn't published a build for it yet, the step stops with a message
+  saying so, before anything is mounted.
+- `lustre-client-modules-aws`, which follows Ubuntu's `linux-aws` kernel
+  package. When Ubuntu installs a kernel update on its own, the matching
+  Lustre module comes with it, so `/fsx` still mounts after the reboot.
+
+A last check looks at the newest installed kernel, the one the next
+reboot will use, and stops if it has no Lustre module. If that happens,
+don't reboot; re-run the deploy once AWS has published the module.
 
 Without FSx, Oxigraph uses a Docker named volume on the server's disk.
 

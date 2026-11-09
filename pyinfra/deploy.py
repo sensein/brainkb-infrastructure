@@ -298,6 +298,27 @@ if FSX_DNS_NAME:
         ],
         _sudo=True,
     )
+    # The module above only fits today's kernel. Ubuntu installs kernel
+    # updates on its own, and after the reboot that activates one, /fsx
+    # wouldn't mount until the deploy ran again. lustre-client-modules-aws
+    # follows the linux-aws kernel package, so apt installs the matching
+    # module alongside each new kernel.
+    server.shell(
+        name="Install the Lustre client for future kernels (lustre-client-modules-aws)",
+        commands=["DEBIAN_FRONTEND=noninteractive apt-get install -y -qq lustre-client-modules-aws"],
+        _sudo=True,
+    )
+    server.shell(
+        name="Check the Lustre client fits the kernel the next reboot will use",
+        commands=[
+            'newest="$(ls -1 /boot/vmlinuz-* | sed "s|/boot/vmlinuz-||" | sort -V | tail -n 1)"; '
+            'find "/lib/modules/$newest" -name "lustre.ko*" 2>/dev/null | grep -q . || '
+            '{ echo "Kernel $newest is installed but has no Lustre module, so /fsx would not '
+            'mount after a reboot. Don\'t reboot; re-run the deploy once AWS publishes '
+            'lustre-client-modules-$newest." >&2; exit 1; }'
+        ],
+        _sudo=True,
+    )
     files.directory(
         name=f"Create the {FSX_MOUNT_POINT} mount point",
         path=FSX_MOUNT_POINT,
