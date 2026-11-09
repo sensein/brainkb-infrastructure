@@ -38,6 +38,7 @@ INFRA_DIR = f"{WORKSPACE}/brainkb-infrastructure"
 BACKEND_DIR = f"{WORKSPACE}/BrainKB"
 UI_DIR = f"{WORKSPACE}/brainkb-ui"
 
+INFRA_URL = "https://github.com/sensein/brainkb-infrastructure.git"
 
 
 def local_commit():
@@ -59,8 +60,22 @@ def local_commit():
             "first, so the server runs the same files as this deploy."
         )
     commit = git("rev-parse", "HEAD")
-    git("fetch", "--quiet", "origin")
-    if not git("branch", "--remotes", "--contains", commit):
+
+    # Ask GitHub directly by URL, not through a remote: people name their
+    # remotes differently (origin, upstream, a fork). ls-remote lists the
+    # branch tips; fetching them by name brings their commits in without
+    # creating or moving any local ref (they land only in FETCH_HEAD).
+    tips = {}  # branch name on GitHub -> commit
+    for line in git("ls-remote", "--heads", INFRA_URL).splitlines():
+        sha, ref = line.split("\t")
+        tips[ref.removeprefix("refs/heads/")] = sha
+    git("fetch", "--quiet", INFRA_URL, *(f"refs/heads/{name}" for name in tips))
+
+    def contains(tip):
+        return subprocess.run(["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", commit, tip],
+                              capture_output=True).returncode == 0
+
+    if not any(contains(tip) for tip in tips.values()):
         raise SystemExit(
             f"Commit {commit[:12]} isn't on GitHub yet. Push it first, so the server "
             "can check out the same commit as this deploy."
@@ -68,16 +83,13 @@ def local_commit():
 
     # Pushed but out of date: the usual cause is a forgotten `git pull`,
     # which would put the server back on an older version. Ask first.
-    try:
-        upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-    except subprocess.CalledProcessError:
-        upstream = None  # detached HEAD or no tracking branch: nothing to compare
-    if upstream:
-        behind = int(git("rev-list", "--count", f"HEAD..{upstream}"))
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")  # "HEAD" when detached
+    if branch in tips:
+        behind = int(git("rev-list", "--count", f"HEAD..{tips[branch]}"))
         if behind:
             print(
                 f"Your checkout is {behind} commit{'s' if behind > 1 else ''} behind "
-                f"{upstream} (run `git pull` to update)."
+                f"{branch} on GitHub (run `git pull` to update)."
             )
             if not sys.stdin.isatty():
                 raise SystemExit("Stopping: can't ask whether to continue without a terminal.")
@@ -89,7 +101,7 @@ def local_commit():
 INFRA_COMMIT = local_commit()
 
 REPOS = [
-    ("https://github.com/sensein/brainkb-infrastructure.git", INFRA_DIR, INFRA_COMMIT),
+    (INFRA_URL, INFRA_DIR, INFRA_COMMIT),
     ("https://github.com/sensein/BrainKB.git", BACKEND_DIR, host.data.get("brainkb_branch", "main")),
     ("https://github.com/sensein/brainkb-ui.git", UI_DIR, host.data.get("ui_branch", "main")),
 ]
