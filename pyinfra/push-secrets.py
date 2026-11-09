@@ -3,6 +3,7 @@
 
 Each key becomes one SecureString parameter:
 /brainkb/sandbox/<kind>/<KEY>, where <kind> is "backend" or "ui".
+--prefix changes /brainkb/sandbox, matching deploy.py's ssm_prefix.
 
     # Load every non-empty KEY=value line from an env file:
     pyinfra/push-secrets.py backend pyinfra/secrets/backend.env
@@ -14,6 +15,9 @@ Each key becomes one SecureString parameter:
 
     # See what's stored (names only, never values):
     pyinfra/push-secrets.py backend --list
+
+    # Remove a key (asks first):
+    pyinfra/push-secrets.py backend --delete MONGO_DB_URL
 
 Uses the AWS CLI with your current credentials (e.g. AWS_PROFILE=sensein-sso).
 Only key names are printed.
@@ -28,7 +32,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-PREFIX = "/brainkb/sandbox"
+DEFAULT_PREFIX = "/brainkb/sandbox"
 REGION = os.environ.get("AWS_REGION", "us-east-2")
 
 
@@ -45,11 +49,11 @@ def aws(*args):
     return result.stdout
 
 
-def put(kind, key, value):
+def put(prefix, kind, key, value):
     # The value goes in through a private temporary file rather than as a
     # command-line argument, so it doesn't show up in the process list.
     request = {
-        "Name": f"{PREFIX}/{kind}/{key}",
+        "Name": f"{prefix}/{kind}/{key}",
         "Value": value,
         "Type": "SecureString",
         "Overwrite": True,
@@ -78,7 +82,11 @@ def main():
     group.add_argument("env_file", nargs="?", help="env file to load (KEY=value lines)")
     group.add_argument("--set", metavar="KEY", help="set one key; prompts for the value")
     group.add_argument("--list", action="store_true", help="list stored key names")
+    group.add_argument("--delete", metavar="KEY", help="delete one key; asks first")
+    parser.add_argument("--prefix", default=DEFAULT_PREFIX,
+                        help=f"parameter path prefix (default {DEFAULT_PREFIX})")
     args = parser.parse_args()
+    PREFIX = args.prefix.rstrip("/")
 
     if args.list:
         names = json.loads(
@@ -94,11 +102,19 @@ def main():
             print(name.rsplit("/", 1)[1])
         return
 
+    if args.delete:
+        name = f"{PREFIX}/{args.kind}/{args.delete}"
+        if input(f"Delete {name}? [y/N] ").strip().lower() not in ("y", "yes"):
+            sys.exit("Nothing deleted.")
+        aws("ssm", "delete-parameter", "--name", name)
+        print(f"Deleted {name}")
+        return
+
     if args.set:
         value = getpass.getpass(f"Value for {args.set}: ")
         if not value:
             sys.exit("Empty value; nothing stored.")
-        put(args.kind, args.set, value)
+        put(PREFIX, args.kind, args.set, value)
         print(f"Stored {PREFIX}/{args.kind}/{args.set}")
         return
 
@@ -108,7 +124,7 @@ def main():
     skipped = sorted(key for key, value in values.items() if not value)
     for key, value in values.items():
         if value:
-            put(args.kind, key, value)
+            put(PREFIX, args.kind, key, value)
             print(f"Stored {PREFIX}/{args.kind}/{key}")
     if skipped:
         print(f"Skipped {len(skipped)} empty keys: {', '.join(skipped)}")
