@@ -330,7 +330,11 @@ if FSX_DNS_NAME:
         line=rf"^{re.escape(FSX_DNS_NAME)}@tcp:/{FSX_MOUNT_NAME} ",
         replace=(
             f"{FSX_DNS_NAME}@tcp:/{FSX_MOUNT_NAME} {FSX_MOUNT_POINT} lustre "
-            "defaults,relatime,flock,_netdev,x-systemd.automount,x-systemd.requires=network.service 0 0"
+            # _netdev already orders the mount after the network is up. Don't
+            # add AWS's x-systemd.requires=network.service: that unit is
+            # Amazon Linux's, Ubuntu has none, and systemd then refuses to
+            # mount /fsx at boot ("Unit network.service not found").
+            "defaults,relatime,flock,_netdev,x-systemd.automount 0 0"
         ),
         _sudo=True,
     )
