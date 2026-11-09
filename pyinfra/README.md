@@ -62,9 +62,12 @@ Day to day, use `push-secrets.py`:
 
     pyinfra/push-secrets.py backend --list                     # key names (never values)
     pyinfra/push-secrets.py backend --set GLOBUS_CLIENT_SECRET # prompts for the value
+    pyinfra/push-secrets.py backend --delete SOME_KEY          # asks first
 
 Then re-run the deploy (`--data build_ui=false` if only backend values
-changed). Avoid `aws ssm put-parameter --value ...` for secrets: it leaves
+changed)). A key that's in SSM but not in the template is still written to
+the server (at the end of the file), so delete keys that are no longer
+used rather than leaving them. Avoid `aws ssm put-parameter --value ...` for secrets: it leaves
 the value in your shell history.
 
 **One-time move from local files.** For a server that was set up by hand,
@@ -115,6 +118,12 @@ each one skips itself when there's nothing to do. "Write the backend
 change: the brainkb-ui checkout step restores the repo's committed copy
 of that tracked file before pulling, and the write step then puts ours
 back. The content ends up the same.
+
+**Don't print secrets.** Run the deploy without `--diff`: with it,
+PyInfra prints the changes to the env files, secret values included. On
+the server, `docker compose config`, `docker inspect` and `cat .env`
+also show them. Don't paste their output into chat, issues or Slack
+when debugging; share key names instead.
 
 Options (`--data key=value`, repeatable):
 

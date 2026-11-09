@@ -146,6 +146,18 @@ widen the :22 rule:
 None of these blocks v1 sandbox from operator laptops. Pick one when CI
 actually becomes the driver.
 
+**Decided (2026-11, v1 tofu sandbox).** Option 2 instead of laptop SSH:
+the instance has no inbound port 22. PyInfra connects over SSH carried by
+an **SSM Session Manager** tunnel (`AWS-StartSSHSession`), after pushing
+the operator's public key with **EC2 Instance Connect**, which accepts it
+for 60 seconds. So there's no long-lived key on the host, no deploy key to
+store, and no source IPs to manage. Access is whatever the operator's AWS
+role allows, and sessions are logged by AWS. See
+`pyinfra/ssh-via-ssm.sh`. The same path works for GitHub Actions later,
+with an OIDC role instead of a person's login. Production still has port
+22 open and no instance role; it moves over when it gets the same
+treatment.
+
 ---
 
 ## Second-tier decisions
