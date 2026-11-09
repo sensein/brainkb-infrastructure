@@ -82,10 +82,14 @@ file system and bucket, separate from production's. It provisions:
   private).
 - FSx for Lustre, `PERSISTENT_2`, 1.2 TB, 125 MB/s/TiB, LZ4
   compression, in the same subnet as the EC2.
-- The FSx ↔ S3 data-repository association, with a **conservative
-  deletion policy**: imports/exports on NEW+CHANGED events only, not
-  DELETED (per `decisions.md` §2). It needs `PERSISTENT_2`; `SCRATCH_2`
+- The FSx ↔ S3 data-repository association: imports/exports on
+  NEW+CHANGED events only, not DELETED, so deleting a file on one side
+  doesn't delete it on the other. It needs `PERSISTENT_2`; `SCRATCH_2`
   doesn't support it.
+- A lifecycle rule on the bucket: old versions of a file are deleted
+  after 30 days, and unfinished uploads after 7. Versioning, not the
+  missing DELETED event, is what protects against a bad write such as a
+  wrong SPARQL DELETE: S3 keeps the earlier versions for those 30 days.
 - FSx security group: Lustre ports (988, 1018-1023) between the file
   servers and with the app host, in both directions. The app SG gets
   the matching inbound rules from FSx.
