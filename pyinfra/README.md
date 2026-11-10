@@ -26,11 +26,33 @@ command deploys new code, and also rebuilds a fresh instance from nothing.
        python3 -m venv .venv && source .venv/bin/activate
        pip install -r pyinfra/requirements.txt
 
-2. AWS access: the AWS CLI, the Session Manager plugin
-   (`brew install --cask session-manager-plugin`), and an SSO login:
+2. AWS access: the AWS CLI (`brew install awscli`), the Session Manager
+   plugin (`brew install --cask session-manager-plugin`), and an SSO
+   login for account 164409279158.
+
+   `sensein-sso` in the commands here is the name of an AWS CLI
+   **profile**, an entry in your own `~/.aws/config`. It isn't an
+   account or a shared setting, so create it once:
+
+       aws configure sso
+
+   When asked, give:
+   - SSO start URL: `https://mit.awsapps.com/start`
+   - the region it asks for
+   - account: `164409279158`
+   - role: `AdministratorAccess` (or whichever your login offers for that account)
+   - default region: `us-east-2`
+   - profile name: `sensein-sso`. Any name works; this one matches the commands here.
+
+   Then, in each new terminal:
 
        aws sso login --profile sensein-sso
        export AWS_PROFILE=sensein-sso
+
+   Check it with `aws sts get-caller-identity`: it should show account
+   164409279158 and an `AWSReservedSSO_...` role. If it shows an IAM user
+   (`user/<name>`) instead, the profile isn't in use, and connecting fails
+   with `not authorized to perform: ec2-instance-connect:SendSSHPublicKey`.
 
 3. OpenTofu initialised for the sandbox, so `tofu output` works:
 
@@ -303,10 +325,22 @@ sandbox README). `ssh-via-ssm.sh` is used as the SSH `ProxyCommand`. It:
 2. opens an **SSM Session Manager** tunnel to the instance's sshd and
    carries the SSH connection over it.
 
-`inventory.py` writes `pyinfra/.ssh_config` (gitignored) with this set up.
-You can use it for a normal shell too:
+`inventory.py` writes `pyinfra/.ssh_config` (gitignored) with this set up,
+so it exists only after one `pyinfra pyinfra/inventory.py ...` run. Plain
+`ssh` to the instance (without that file) can't connect: there's no
+port 22. With the file, and `AWS_PROFILE` set, you can use it for a
+normal shell too:
 
     ssh -F pyinfra/.ssh_config "$(cd tofu/environments/sandbox && tofu output -raw instance_id)"
+
+Without the repo set up, a shell needs only the AWS CLI, the plugin and
+the profile:
+
+    aws ssm start-session --profile sensein-sso --region us-east-2 --target "$(cd tofu/environments/sandbox && tofu output -raw instance_id)"
+
+(or the instance ID, `i-008a0c667a85dd0f4` today), then `sudo su - ubuntu`.
+The console's **Session Manager** tab works too; its **EC2 Instance
+Connect** tab doesn't, because it needs port 22.
 
 This is option 2 ("SSM-based execution") of `decisions.md` §5.
 
