@@ -159,9 +159,22 @@ Oxigraph's live data is on the server's own disk, at
 `/home/ubuntu/oxigraph-db`, with or without FSx. Nothing in Docker
 depends on `/fsx`, so a missing FSx mount only stops backups. Earlier
 deploys put the data on `/fsx/oxigraph-db`. The first deploy after the
-change copies it to the local directory, with Oxigraph stopped, and
-leaves the FSx copy in place. Delete it by hand once the local copy is
-confirmed: `sudo rm -r /fsx/oxigraph-db`.
+change moves it:
+
+1. counts the records (`brainkb-graph-count`, installed by the deploy),
+2. stops Oxigraph and copies the store to `/home/ubuntu/oxigraph-db.partial`,
+3. renames that to `oxigraph-db` only once the copy has finished (a
+   failed copy stops the deploy and switches nothing), and
+4. after compose starts Oxigraph on the local copy, compares the count
+   and fails the deploy if it differs.
+
+The FSx copy is left in place. Once the local copy is confirmed, remove
+it from both FSx and S3; the S3 link doesn't export deletes:
+
+    sudo rm -r /fsx/oxigraph-db
+    aws s3 rm --recursive s3://sensein-brainkb-sandbox-data/oxigraph-db/
+
+Its old S3 versions expire after 30 days.
 
 The Lustre client is a kernel module, so its version has to match the
 kernel. The deploy installs two packages:
@@ -184,8 +197,9 @@ don't reboot; re-run the deploy once AWS has published the module.
 
 - exports the whole store (`GET /store`, gzipped N-Quads), which Oxigraph
   serves from a consistent snapshot without stopping,
-- writes `/fsx/backups/graph-<date>.nq.gz`, through a local temp file so
-  the S3 link only sees finished files, and
+- writes `/fsx/backups/graph-<date>.nq.gz` through a local temp file, so
+  a failed export never lands on FSx (the move to FSx is a copy, which
+  the S3 link may see partway; its final export is the finished file), and
 - keeps the newest 7 on FSx.
 
 The FSx ↔ S3 link copies each file to `s3://sensein-brainkb-sandbox-data/backups/`.
@@ -193,9 +207,31 @@ It doesn't export deletes, so S3 keeps older ones until someone removes
 them (see #24). The script stops with a message if FSx isn't mounted.
 Its log is `/var/log/brainkb-graph-backup.log`.
 
-To run it by hand: `sudo /usr/local/bin/brainkb-graph-backup`. To restore,
-load a file into an empty store with Oxigraph stopped, as
-`copy-old-graph.sh import` does (#20; `oxigraph load --format nq`).
+To run it by hand: `sudo /usr/local/bin/brainkb-graph-backup`.
+
+**After the first deploy with backups, check them once,** on the server:
+
+1. Run the backup by hand, then confirm the file is on FSx and in S3:
+
+       sudo /usr/local/bin/brainkb-graph-backup
+       ls -lh /fsx/backups/
+       aws s3 ls s3://sensein-brainkb-sandbox-data/backups/   # from a laptop with AWS access
+
+2. Restore it into a spare Oxigraph and compare counts. This leaves the
+   live store alone:
+
+       f=$(ls -1t /fsx/backups/graph-*.nq.gz | head -n 1)
+       sudo mkdir -p /var/tmp/restore-test
+       zcat "$f" | sudo docker run --rm -i -v /var/tmp/restore-test:/data ghcr.io/oxigraph/oxigraph:latest load --location /data --format nq
+       sudo docker run -d --name oxigraph-restore-test --network brainkb-sandbox-network -v /var/tmp/restore-test:/data ghcr.io/oxigraph/oxigraph:latest serve --location /data --bind 0.0.0.0:7878
+       sleep 10; brainkb-graph-count oxigraph-restore-test; brainkb-graph-count
+       sudo docker rm -f oxigraph-restore-test && sudo rm -r /var/tmp/restore-test
+
+   The two counts should match (23,472,446 at the 2026-11-06 copy, plus
+   anything added since).
+
+To restore for real, load a file the same way into the live store's
+directory with Oxigraph stopped, as `copy-old-graph.sh import` does (#20).
 
 ### Copying the old sandbox's graph data
 

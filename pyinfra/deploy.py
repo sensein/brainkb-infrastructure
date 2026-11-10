@@ -404,19 +404,47 @@ server.shell(
     ],
     _sudo=True,
 )
-data_commands = [f"mkdir -p {OXIGRAPH_DATA_DIR}"]
+# `brainkb-graph-count` prints the store's record count (quads in the
+# default and named graphs). The move below and the backup checks use it.
+GRAPH_COUNT_SCRIPT = """#!/usr/bin/env bash
+# Number of records in the sandbox's Oxigraph store. Written by pyinfra/deploy.py.
+set -euo pipefail
+docker run --rm --network brainkb-sandbox-network curlimages/curl:8.10.1 -sSf -X POST \\
+  -H 'Content-Type: application/sparql-query' -H 'Accept: application/sparql-results+json' \\
+  --data-binary 'SELECT (COUNT(*) AS ?n) WHERE { { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }' \\
+  "http://${1:-brainkb-oxigraph-sandbox}:7878/query" | grep -oE '"value" *: *"[0-9]+"' | grep -oE '[0-9]+'
+"""
+files.put(
+    name="Install brainkb-graph-count",
+    src=io.StringIO(GRAPH_COUNT_SCRIPT),
+    dest="/usr/local/bin/brainkb-graph-count",
+    mode="755",
+    _sudo=True,
+)
+
+MOVE_COUNT_FILE = "/var/tmp/oxigraph-move-count"
+data_commands = []
 if FSX_DNS_NAME:
     # One-time move off FSx: only while the local directory has no store
-    # yet and FSx has one. Oxigraph is stopped first so the copy is
-    # consistent; compose starts it again on the local copy just below.
-    # The FSx copy is left in place until someone deletes it.
+    # yet and FSx has one. The count is taken first (from the running
+    # Oxigraph), then Oxigraph is stopped so the copy is consistent. The
+    # copy goes to a temporary directory, renamed into place only once cp
+    # has finished, so a copy that fails halfway is never used. Compose
+    # starts Oxigraph on the local copy just below, and the step after it
+    # compares the count. The FSx copy is left in place.
+    d, tmp = OXIGRAPH_DATA_DIR, f"{OXIGRAPH_DATA_DIR}.partial"
     data_commands.append(
-        f"if [ ! -e {OXIGRAPH_DATA_DIR}/CURRENT ] && [ -e {OLD_FSX_DATA_DIR}/CURRENT ] "
+        f"if [ ! -e {d}/CURRENT ] && [ -e {OLD_FSX_DATA_DIR}/CURRENT ] "
         f"&& findmnt -n -t lustre {FSX_MOUNT_POINT} >/dev/null; then "
+        f"brainkb-graph-count > {MOVE_COUNT_FILE} 2>/dev/null || : > {MOVE_COUNT_FILE}; "
         "docker stop brainkb-oxigraph-sandbox >/dev/null 2>&1 || true; "
-        f"cp -a {OLD_FSX_DATA_DIR}/. {OXIGRAPH_DATA_DIR}/ && "
-        f"echo 'Copied Oxigraph data from {OLD_FSX_DATA_DIR}'; fi"
+        f"{{ rm -rf {tmp} && cp -a {OLD_FSX_DATA_DIR} {tmp}; }} "
+        f"|| {{ echo 'Copying {OLD_FSX_DATA_DIR} failed; nothing was switched over. Re-run the deploy.' >&2; exit 1; }}; "
+        f"rmdir {d} 2>/dev/null || true; "
+        f"[ ! -e {d} ] || {{ echo '{d} exists but holds no store; move it aside and re-run' >&2; exit 1; }}; "
+        f"mv {tmp} {d} || exit 1; echo 'Copied Oxigraph data from {OLD_FSX_DATA_DIR}'; fi"
     )
+data_commands.append(f"mkdir -p {OXIGRAPH_DATA_DIR}")
 server.shell(
     name=f"Keep Oxigraph's data in {OXIGRAPH_DATA_DIR}",
     commands=data_commands,
@@ -441,13 +469,31 @@ server.shell(
     ],
     _sudo=True,
 )
+if FSX_DNS_NAME:
+    server.shell(
+        name="Check the record count after moving Oxigraph's data",
+        # Only right after the move above, while the count file exists. A
+        # mismatch fails the deploy and keeps the file, so a re-run checks again.
+        commands=[
+            f"if [ -e {MOVE_COUNT_FILE} ]; then "
+            f'expected="$(cat {MOVE_COUNT_FILE})"; n=""; '
+            'for i in $(seq 1 30); do n="$(brainkb-graph-count 2>/dev/null)" && break; sleep 5; done; '
+            'echo "Oxigraph has ${n:-no answer} records; before the move: ${expected:-not counted}"; '
+            '[ -n "$n" ] || exit 1; '
+            '{ [ -z "$expected" ] || [ "$n" = "$expected" ]; } || { echo "Record counts differ" >&2; exit 1; }; '
+            f"rm -f {MOVE_COUNT_FILE}; fi"
+        ],
+        _sudo=True,
+    )
 
 # ---- Nightly graph backup ---------------------------------------------------
 # A full export of the store (GET /store as gzipped N-Quads, the same
 # export copy-old-graph.sh uses), which Oxigraph serves from a consistent
-# snapshot without stopping. It's written locally, then moved to FSx, so
-# the S3 link only ever sees finished files. The newest BACKUP_KEEP stay
-# on FSx; S3 keeps the copies the link made (it doesn't export deletes).
+# snapshot without stopping. It's written to a local temp file first, so a
+# failed export never lands on FSx. The move to FSx is a copy across file
+# systems, which the S3 link may see partway; its final export is the
+# finished file. The newest BACKUP_KEEP stay on FSx; S3 keeps the copies
+# the link made (it doesn't export deletes).
 
 BACKUP_SCRIPT = f"""#!/usr/bin/env bash
 # Nightly export of the sandbox's graph store. Written by pyinfra/deploy.py.
