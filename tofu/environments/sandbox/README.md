@@ -98,7 +98,8 @@ file system and bucket, separate from production's. It provisions:
 
 Cost: about $175/month for the file system, plus S3 storage.
 `pyinfra/deploy.py` installs the Lustre client, mounts the file system
-at `/fsx` and points Oxigraph's data at `/fsx/oxigraph-db`.
+at `/fsx`, and writes a nightly export of the graph store to
+`/fsx/backups/`. Oxigraph's live data stays on the instance's own disk.
 
 **Not yet in this environment** (own PRs, in order):
 
