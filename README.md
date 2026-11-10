@@ -80,7 +80,7 @@ Where things stand:
 | Address | test.brainkb.org (and `usermanagement.`, `mlservice.`, `queryservice.` under it) | brainkb.org |
 | Server built by | OpenTofu (`tofu/environments/sandbox/`) | by hand; adopted into OpenTofu as-is (`tofu/environments/production/`, import only) |
 | Set up by | PyInfra (`pyinfra/`) | by hand |
-| Oxigraph data | FSx for Lustre at `/fsx/oxigraph-db` | FSx for Lustre |
+| Oxigraph data | Server's disk (`/home/ubuntu/oxigraph-db`); nightly backups to FSx at `/fsx/backups` | FSx for Lustre |
 | Secrets | SSM Parameter Store, `/brainkb/sandbox/` | `.env` files on the server |
 
 The older sandbox at sandbox.brainkb.org runs on the production server
@@ -159,7 +159,7 @@ see `production/README.md` and `sandbox/README.md` for details.
 ## Status
 
 - **Sandbox (test.brainkb.org):** built by OpenTofu, set up by PyInfra,
-  secrets in SSM, Oxigraph on FSx, data copied from the old sandbox.
+  secrets in SSM, nightly graph backups to FSx, data copied from the old sandbox.
 - **Production:** described in OpenTofu as it runs today, not yet applied
   (the first apply only records the existing resources, and changes
   nothing). Still set up and deployed by hand.
