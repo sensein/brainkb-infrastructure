@@ -193,6 +193,9 @@ do_postgres() {
   echo "    old sandbox: $old   new sandbox: $new   (spaces, graphs in spaces)"
   [ "$new" = "$old" ] || die "counts differ"
   echo "Done: the counts match. The backend takes a minute or two to start."
+  echo
+  echo "The dump holds users' emails, tokens and PATs. Once the sandbox looks right,"
+  echo "delete it from FSx and S3 (all versions): see pyinfra/README.md, 'Delete the Postgres dump'."
 }
 
 case "${1:-}" in
