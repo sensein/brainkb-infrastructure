@@ -86,5 +86,6 @@ dns_allow_overwrite = false
 # 2026-11-04: the test sandbox should match production's storage).
 # Its own file system and bucket, not production's. PERSISTENT_2,
 # 1.2 TB, 125 MB/s/TiB: about $175/month. pyinfra/deploy.py mounts it
-# at /fsx and puts Oxigraph's data there.
+# at /fsx and writes nightly graph backups to /fsx/backups (the live
+# Oxigraph data stays on the instance's disk).
 enable_fsx = true
