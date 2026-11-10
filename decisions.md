@@ -146,6 +146,18 @@ widen the :22 rule:
 None of these blocks v1 sandbox from operator laptops. Pick one when CI
 actually becomes the driver.
 
+**Decided (2026-11, v1 tofu sandbox).** Option 2 instead of laptop SSH:
+the instance has no inbound port 22. PyInfra connects over SSH carried by
+an **SSM Session Manager** tunnel (`AWS-StartSSHSession`), after pushing
+the operator's public key with **EC2 Instance Connect**, which accepts it
+for 60 seconds. So there's no long-lived key on the host, no deploy key to
+store, and no source IPs to manage. Access is whatever the operator's AWS
+role allows, and sessions are logged by AWS. See
+`pyinfra/ssh-via-ssm.sh`. The same path works for GitHub Actions later,
+with an OIDC role instead of a person's login. Production still has port
+22 open and no instance role; it moves over when it gets the same
+treatment.
+
 ---
 
 ## Second-tier decisions
@@ -183,6 +195,12 @@ only when we want automatic rotation (probably: RDS credentials if/when we adopt
 **Also.** The two secrets `bootstrap.md` §Credentials flags for rotation
 (`MONGO_DB_URL` embedded password; `CHAT_SERVICE_JWT_SECRET_KEY`) should rotate as part of
 moving them into SSM, not after.
+
+**In use for the sandbox (2026-11-03).** The tofu sandbox's secrets are
+SSM SecureString parameters under `/brainkb/sandbox/{backend,ui}/<KEY>`,
+read by `pyinfra/deploy.py` at deploy time (see `pyinfra/README.md`).
+Production isn't moved yet; the rotation note above still applies when it
+is.
 
 ### 9. CI/CD: laptop-driven or GitHub Actions
 
