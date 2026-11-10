@@ -39,11 +39,12 @@ needs.
   file system, plus S3 storage.
 - Built by `tofu/modules/brainkb` (`enable_fsx = true` in
   `sandbox.tfvars`) and mounted at `/fsx` by `pyinfra/deploy.py`.
-- Under review (#19): whether the live Oxigraph DB stays on FSx or moves
-  to the server's disk, with FSx holding stopped-snapshot backups, as
-  production's recovery runbook does. A reboot test on 2026-11-09 showed
-  the risk: while `/fsx` failed to mount, Docker hung and the instance
-  had to be rebooted from AWS.
+- The live Oxigraph DB is on the instance's disk (`/home/ubuntu/oxigraph-db`),
+  and FSx holds a nightly export (`/fsx/backups/graph-<date>.nq.gz`, last 7
+  kept). Decided in review of #19 (2026-11-10). A reboot test on
+  2026-11-09 showed the risk of the live DB on FSx: while `/fsx` failed
+  to mount, Docker hung and the instance had to be rebooted from AWS.
+  Wider rules for FSx and backups are in #24.
 
 ---
 

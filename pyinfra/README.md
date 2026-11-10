@@ -151,8 +151,16 @@ DNS and mount names from `tofu output`, and the deploy:
    **running kernel**,
 3. mounts the file system at `/fsx` (with an `/etc/fstab` entry, so it
    comes back after a reboot), and
-4. points Oxigraph's data at `/fsx/oxigraph-db`. Temp files stay on a
-   local Docker volume.
+4. installs a nightly backup of the graph store to `/fsx/backups/`
+   (see "Graph backups" below).
+
+Oxigraph's live data is on the server's own disk, at
+`/home/ubuntu/oxigraph-db`, with or without FSx. Nothing in Docker
+depends on `/fsx`, so a missing FSx mount only stops backups. Earlier
+deploys put the data on `/fsx/oxigraph-db`. The first deploy after the
+change copies it to the local directory, with Oxigraph stopped, and
+leaves the FSx copy in place. Delete it by hand once the local copy is
+confirmed: `sudo rm -r /fsx/oxigraph-db`.
 
 The Lustre client is a kernel module, so its version has to match the
 kernel. The deploy installs two packages:
@@ -168,7 +176,25 @@ A last check looks at the newest installed kernel, the one the next
 reboot will use, and stops if it has no Lustre module. If that happens,
 don't reboot; re-run the deploy once AWS has published the module.
 
-Without FSx, Oxigraph uses a Docker named volume on the server's disk.
+### Graph backups
+
+`/usr/local/bin/brainkb-graph-backup` runs every night at 03:17 UTC
+(`/etc/cron.d/brainkb-graph-backup`). It:
+
+- exports the whole store (`GET /store`, gzipped N-Quads), which Oxigraph
+  serves from a consistent snapshot without stopping,
+- writes `/fsx/backups/graph-<date>.nq.gz`, through a local temp file so
+  the S3 link only sees finished files, and
+- keeps the newest 7 on FSx.
+
+The FSx ↔ S3 link copies each file to `s3://sensein-brainkb-sandbox-data/backups/`.
+It doesn't export deletes, so S3 keeps older ones until someone removes
+them (see #24). The script stops with a message if FSx isn't mounted.
+Its log is `/var/log/brainkb-graph-backup.log`.
+
+To run it by hand: `sudo /usr/local/bin/brainkb-graph-backup`. To restore,
+load a file into an empty store with Oxigraph stopped, as
+`copy-old-graph.sh import` does (#20; `oxigraph load --format nq`).
 
 ## How it connects
 

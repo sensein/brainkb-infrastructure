@@ -108,12 +108,20 @@ REPOS = [
 
 BUILD_UI = str(host.data.get("build_ui", True)).lower() not in ("false", "0", "no")
 
-# FSx for Lustre, when tofu provisions it (enable_fsx = true). Oxigraph's
-# data goes on it, as in production; without it, a Docker named volume.
+# FSx for Lustre, when tofu provisions it (enable_fsx = true). It holds
+# the nightly graph backups, which its S3 link copies to S3.
 FSX_DNS_NAME = host.data.get("fsx_dns_name")
 FSX_MOUNT_NAME = host.data.get("fsx_mount_name")
 FSX_MOUNT_POINT = "/fsx"
-OXIGRAPH_DATA_DIR = f"{FSX_MOUNT_POINT}/oxigraph-db"
+BACKUP_DIR = f"{FSX_MOUNT_POINT}/backups"
+BACKUP_KEEP = 7
+
+# Oxigraph's live data stays on the server's own disk, as in production.
+# On FSx, a mount that failed at boot left Oxigraph without its data and
+# hung Docker, which had touched /fsx (2026-11-09). Earlier deploys put it
+# at /fsx/oxigraph-db; the deploy copies it from there once (below).
+OXIGRAPH_DATA_DIR = "/home/ubuntu/oxigraph-db"
+OLD_FSX_DATA_DIR = f"{FSX_MOUNT_POINT}/oxigraph-db"
 
 # Values that differ from the co-tenant sandbox the templates were written
 # for. They're applied last, so they win over anything in the secrets files
@@ -127,10 +135,10 @@ BACKEND_SETTINGS = {
     "USERMANAGEMENT_PUBLIC_BASE_URL": f"https://usermanagement.{HOSTNAME}",
     "USERMANAGEMENT_FRONTEND_CALLBACK_URL": f"https://{HOSTNAME}/auth/callback",
     "CORS_ALLOWED_ORIGINS": f"https://{HOSTNAME}",
-    # Data on FSx when there is one, else a Docker named volume (blank).
-    # Temp files stay on a local named volume either way. The co-tenant
-    # .env points these at host directories that don't exist here.
-    "OXIGRAPH_DATA_PATH": OXIGRAPH_DATA_DIR if FSX_DNS_NAME else "",
+    # Data in a directory on the server's disk; temp files on a local named
+    # volume. The co-tenant .env points these at directories that don't
+    # exist here.
+    "OXIGRAPH_DATA_PATH": OXIGRAPH_DATA_DIR,
     "OXIGRAPH_TMP_PATH": "",
 }
 UI_SETTINGS = {
@@ -343,7 +351,7 @@ if FSX_DNS_NAME:
         commands=[
             f"mountpoint -q {FSX_MOUNT_POINT} || mount {FSX_MOUNT_POINT}",
             f"mountpoint -q {FSX_MOUNT_POINT}",
-            f"mkdir -p {OXIGRAPH_DATA_DIR}",
+            f"mkdir -p {BACKUP_DIR}",
         ],
         _sudo=True,
     )
@@ -396,6 +404,24 @@ server.shell(
     ],
     _sudo=True,
 )
+data_commands = [f"mkdir -p {OXIGRAPH_DATA_DIR}"]
+if FSX_DNS_NAME:
+    # One-time move off FSx: only while the local directory has no store
+    # yet and FSx has one. Oxigraph is stopped first so the copy is
+    # consistent; compose starts it again on the local copy just below.
+    # The FSx copy is left in place until someone deletes it.
+    data_commands.append(
+        f"if [ ! -e {OXIGRAPH_DATA_DIR}/CURRENT ] && [ -e {OLD_FSX_DATA_DIR}/CURRENT ] "
+        f"&& findmnt -n -t lustre {FSX_MOUNT_POINT} >/dev/null; then "
+        "docker stop brainkb-oxigraph-sandbox >/dev/null 2>&1 || true; "
+        f"cp -a {OLD_FSX_DATA_DIR}/. {OXIGRAPH_DATA_DIR}/ && "
+        f"echo 'Copied Oxigraph data from {OLD_FSX_DATA_DIR}'; fi"
+    )
+server.shell(
+    name=f"Keep Oxigraph's data in {OXIGRAPH_DATA_DIR}",
+    commands=data_commands,
+    _sudo=True,
+)
 server.shell(
     name="Build and start the backend stack",
     commands=[f"cd {INFRA_DIR}/sandbox && docker compose up -d --build"],
@@ -415,6 +441,55 @@ server.shell(
     ],
     _sudo=True,
 )
+
+# ---- Nightly graph backup ---------------------------------------------------
+# A full export of the store (GET /store as gzipped N-Quads, the same
+# export copy-old-graph.sh uses), which Oxigraph serves from a consistent
+# snapshot without stopping. It's written locally, then moved to FSx, so
+# the S3 link only ever sees finished files. The newest BACKUP_KEEP stay
+# on FSx; S3 keeps the copies the link made (it doesn't export deletes).
+
+BACKUP_SCRIPT = f"""#!/usr/bin/env bash
+# Nightly export of the sandbox's graph store. Written by pyinfra/deploy.py.
+set -euo pipefail
+dir={BACKUP_DIR}
+# Touch /fsx first so the automount fires, then check FSx itself is there:
+# an automount point counts as a mountpoint even when the mount failed.
+ls {FSX_MOUNT_POINT} >/dev/null 2>&1 || true
+if ! findmnt -n -t lustre {FSX_MOUNT_POINT} >/dev/null; then
+  echo "$(date -Is) FSx is not mounted at {FSX_MOUNT_POINT}; no backup written" >&2
+  exit 1
+fi
+mkdir -p "$dir"
+name="graph-$(date -u +%Y-%m-%d).nq.gz"
+tmp="$(mktemp /var/tmp/graph-backup.XXXXXX)"
+trap 'rm -f "$tmp"' EXIT
+docker run --rm --network brainkb-sandbox-network curlimages/curl:8.10.1 -sSf \\
+  -H 'Accept: application/n-quads' http://brainkb-oxigraph-sandbox:7878/store | gzip -1 > "$tmp"
+chmod 644 "$tmp"
+mv "$tmp" "$dir/$name"
+echo "$(date -Is) wrote $dir/$name ($(du -h "$dir/$name" | cut -f1))"
+ls -1t "$dir"/graph-*.nq.gz | tail -n +{BACKUP_KEEP + 1} | xargs -r rm -f --
+"""
+
+if FSX_DNS_NAME:
+    files.put(
+        name="Install the nightly graph backup script",
+        src=io.StringIO(BACKUP_SCRIPT),
+        dest="/usr/local/bin/brainkb-graph-backup",
+        mode="755",
+        _sudo=True,
+    )
+    files.put(
+        name="Run the graph backup nightly (03:17 UTC)",
+        src=io.StringIO(
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+            "17 3 * * * root /usr/local/bin/brainkb-graph-backup >> /var/log/brainkb-graph-backup.log 2>&1\n"
+        ),
+        dest="/etc/cron.d/brainkb-graph-backup",
+        mode="644",
+        _sudo=True,
+    )
 
 # ---- UI --------------------------------------------------------------------
 
