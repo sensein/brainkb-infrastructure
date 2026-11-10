@@ -31,6 +31,35 @@ resource "aws_s3_bucket_versioning" "data" {
   }
 }
 
+# Versioning is what protects against a bad write: a SPARQL DELETE or a
+# broken migration changes files, and S3 keeps the previous versions. This
+# rule keeps that from growing forever by expiring old versions after
+# var.data_bucket_noncurrent_version_days, and cleans up uploads that
+# never finished.
+resource "aws_s3_bucket_lifecycle_configuration" "data" {
+  count = var.enable_fsx ? 1 : 0
+
+  bucket = aws_s3_bucket.data[0].id
+
+  rule {
+    id     = "expire-old-versions"
+    status = "Enabled"
+
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = var.data_bucket_noncurrent_version_days
+    }
+
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 7
+    }
+  }
+
+  # The rule applies to versions, so versioning has to be on first.
+  depends_on = [aws_s3_bucket_versioning.data]
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "data" {
   count = var.enable_fsx ? 1 : 0
 
@@ -53,9 +82,10 @@ resource "aws_s3_bucket_public_access_block" "data" {
   restrict_public_buckets = true
 }
 
-# FSx security group — Lustre client protocol from the app SG only.
-# App SG's existing "all egress" rule already permits outbound to
-# FSx; no reverse rules needed here.
+# FSx security group. Lustre needs its ports (988, 1018-1023) open in
+# both directions between the file servers and their clients, and among
+# the file servers themselves; FSx refuses to create the file system
+# without the self-referencing rules.
 resource "aws_security_group" "fsx" {
   count = var.enable_fsx ? 1 : 0
 
@@ -90,6 +120,63 @@ resource "aws_vpc_security_group_ingress_rule" "fsx_from_app_1018_1023" {
   tags                         = local.tags
 }
 
+locals {
+  lustre_ports = {
+    "988"       = { from = 988, to = 988 }
+    "1018-1023" = { from = 1018, to = 1023 }
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "fsx_from_self" {
+  for_each = var.enable_fsx ? local.lustre_ports : {}
+
+  security_group_id            = aws_security_group.fsx[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.from
+  to_port                      = each.value.to
+  referenced_security_group_id = aws_security_group.fsx[0].id
+  description                  = "Lustre (${each.key}) between FSx file servers"
+  tags                         = local.tags
+}
+
+resource "aws_vpc_security_group_egress_rule" "fsx_to_self" {
+  for_each = var.enable_fsx ? local.lustre_ports : {}
+
+  security_group_id            = aws_security_group.fsx[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.from
+  to_port                      = each.value.to
+  referenced_security_group_id = aws_security_group.fsx[0].id
+  description                  = "Lustre (${each.key}) between FSx file servers"
+  tags                         = local.tags
+}
+
+resource "aws_vpc_security_group_egress_rule" "fsx_to_app" {
+  for_each = var.enable_fsx ? local.lustre_ports : {}
+
+  security_group_id            = aws_security_group.fsx[0].id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.from
+  to_port                      = each.value.to
+  referenced_security_group_id = aws_security_group.app.id
+  description                  = "Lustre (${each.key}) to the app host"
+  tags                         = local.tags
+}
+
+# The app SG's "all egress" rule covers client-to-server traffic; this is
+# the server-to-client direction (production's SG has the same pair).
+resource "aws_vpc_security_group_ingress_rule" "app_from_fsx" {
+  for_each = var.enable_fsx ? local.lustre_ports : {}
+
+  security_group_id            = aws_security_group.app.id
+  ip_protocol                  = "tcp"
+  from_port                    = each.value.from
+  to_port                      = each.value.to
+  referenced_security_group_id = aws_security_group.fsx[0].id
+  description                  = "Lustre (${each.key}) from FSx"
+  tags                         = local.tags
+}
+
 resource "aws_fsx_lustre_file_system" "data" {
   count = var.enable_fsx ? 1 : 0
 
@@ -110,13 +197,19 @@ resource "aws_fsx_lustre_file_system" "data" {
   tags = merge(local.tags, { Name = "${local.name}-fsx" })
 }
 
-# The S3 mirror. Deletion propagation is intentionally conservative
-# (import/export events omit DELETED) — see decisions.md §2.
+# The S3 mirror. The import/export events omit DELETED, so deleting a file
+# on one side doesn't delete it on the other. That doesn't protect against
+# a bad SPARQL DELETE, which changes files rather than deleting them; the
+# bucket's versioning (above) is what keeps the earlier copies. Data
+# repository associations need a PERSISTENT_2 file system.
 resource "aws_fsx_data_repository_association" "data" {
   count = var.enable_fsx ? 1 : 0
 
+  # data_repository_path has no trailing slash: AWS stores it without
+  # one, and any difference forces a replacement (which prevent_destroy
+  # blocks).
   file_system_id       = aws_fsx_lustre_file_system.data[0].id
-  data_repository_path = "s3://${aws_s3_bucket.data[0].id}/"
+  data_repository_path = "s3://${aws_s3_bucket.data[0].id}"
   file_system_path     = "/"
 
   s3 {

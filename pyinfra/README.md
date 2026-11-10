@@ -25,11 +25,33 @@ command deploys new code, and also rebuilds a fresh instance from nothing.
        python3 -m venv .venv && source .venv/bin/activate
        pip install -r pyinfra/requirements.txt
 
-2. AWS access: the AWS CLI, the Session Manager plugin
-   (`brew install --cask session-manager-plugin`), and an SSO login:
+2. AWS access: the AWS CLI (`brew install awscli`), the Session Manager
+   plugin (`brew install --cask session-manager-plugin`), and an SSO
+   login for account 164409279158.
+
+   `sensein-sso` in the commands here is the name of an AWS CLI
+   **profile**, an entry in your own `~/.aws/config`. It isn't an
+   account or a shared setting, so create it once:
+
+       aws configure sso
+
+   When asked, give:
+   - SSO start URL: `https://mit.awsapps.com/start`
+   - the region it asks for
+   - account: `164409279158`
+   - role: `AdministratorAccess` (or whichever your login offers for that account)
+   - default region: `us-east-2`
+   - profile name: `sensein-sso`. Any name works; this one matches the commands here.
+
+   Then, in each new terminal:
 
        aws sso login --profile sensein-sso
        export AWS_PROFILE=sensein-sso
+
+   Check it with `aws sts get-caller-identity`: it should show account
+   164409279158 and an `AWSReservedSSO_...` role. If it shows an IAM user
+   (`user/<name>`) instead, the profile isn't in use, and connecting fails
+   with `not authorized to perform: ec2-instance-connect:SendSSHPublicKey`.
 
 3. OpenTofu initialised for the sandbox, so `tofu output` works:
 
@@ -140,6 +162,98 @@ For example:
 The run ends by checking that all four backend services are `RUNNING` and
 that the UI answers 200 on port 3000. It fails if they don't.
 
+## FSx for Lustre
+
+When the sandbox has FSx (`enable_fsx = true` in
+`tofu/environments/sandbox/sandbox.tfvars`), `inventory.py` picks up its
+DNS and mount names from `tofu output`, and the deploy:
+
+1. adds AWS's FSx Lustre client apt repository,
+2. installs `lustre-client-modules-$(uname -r)`, the client built for the
+   **running kernel**,
+3. mounts the file system at `/fsx` (with an `/etc/fstab` entry, so it
+   comes back after a reboot), and
+4. installs a nightly backup of the graph store to `/fsx/backups/`
+   (see "Graph backups" below).
+
+Oxigraph's live data is on the server's own disk, at
+`/home/ubuntu/oxigraph-db`, with or without FSx. Nothing in Docker
+depends on `/fsx`, so a missing FSx mount only stops backups. Earlier
+deploys put the data on `/fsx/oxigraph-db`. The first deploy after the
+change moves it:
+
+1. counts the records (`brainkb-graph-count`, installed by the deploy),
+2. stops Oxigraph and copies the store to `/home/ubuntu/oxigraph-db.partial`,
+3. renames that to `oxigraph-db` only once the copy has finished (a
+   failed copy stops the deploy and switches nothing), and
+4. after compose starts Oxigraph on the local copy, compares the count
+   and fails the deploy if it differs.
+
+The FSx copy is left in place. Once the local copy is confirmed, remove
+it from both FSx and S3; the S3 link doesn't export deletes:
+
+    sudo rm -r /fsx/oxigraph-db
+    aws s3 rm --recursive s3://sensein-brainkb-sandbox-data/oxigraph-db/
+
+Its old S3 versions expire after 30 days.
+
+The Lustre client is a kernel module, so its version has to match the
+kernel. The deploy installs two packages:
+
+- `lustre-client-modules-$(uname -r)`, for the kernel running now. If
+  AWS hasn't published a build for it yet, the step stops with a message
+  saying so, before anything is mounted.
+- `lustre-client-modules-aws`, which follows Ubuntu's `linux-aws` kernel
+  package. When Ubuntu installs a kernel update on its own, the matching
+  Lustre module comes with it, so `/fsx` still mounts after the reboot.
+
+A last check looks at the newest installed kernel, the one the next
+reboot will use, and stops if it has no Lustre module. If that happens,
+don't reboot; re-run the deploy once AWS has published the module.
+
+### Graph backups
+
+`/usr/local/bin/brainkb-graph-backup` runs every night at 03:17 UTC
+(`/etc/cron.d/brainkb-graph-backup`). It:
+
+- exports the whole store (`GET /store`, gzipped N-Quads), which Oxigraph
+  serves from a consistent snapshot without stopping,
+- writes `/fsx/backups/graph-<date>.nq.gz` through a local temp file, so
+  a failed export never lands on FSx (the move to FSx is a copy, which
+  the S3 link may see partway; its final export is the finished file), and
+- keeps the newest 7 on FSx.
+
+The FSx ↔ S3 link copies each file to `s3://sensein-brainkb-sandbox-data/backups/`.
+It doesn't export deletes, so S3 keeps older ones until someone removes
+them (see #24). The script stops with a message if FSx isn't mounted.
+Its log is `/var/log/brainkb-graph-backup.log`.
+
+To run it by hand: `sudo /usr/local/bin/brainkb-graph-backup`.
+
+**After the first deploy with backups, check them once,** on the server:
+
+1. Run the backup by hand, then confirm the file is on FSx and in S3:
+
+       sudo /usr/local/bin/brainkb-graph-backup
+       ls -lh /fsx/backups/
+       aws s3 ls s3://sensein-brainkb-sandbox-data/backups/   # from a laptop with AWS access
+
+2. Restore it into a spare Oxigraph and compare counts. This leaves the
+   live store alone:
+
+       f=$(ls -1t /fsx/backups/graph-*.nq.gz | head -n 1)
+       sudo mkdir -p /var/tmp/restore-test
+       zcat "$f" | sudo docker run --rm -i -v /var/tmp/restore-test:/data ghcr.io/oxigraph/oxigraph:latest load --location /data --format nq
+       sudo docker run -d --name oxigraph-restore-test --network brainkb-sandbox-network -v /var/tmp/restore-test:/data ghcr.io/oxigraph/oxigraph:latest serve --location /data --bind 0.0.0.0:7878
+       sleep 10; brainkb-graph-count oxigraph-restore-test; brainkb-graph-count
+       sudo docker rm -f oxigraph-restore-test && sudo rm -r /var/tmp/restore-test
+
+   The two counts should match (23,472,446 at the 2026-11-06 copy, plus
+   anything added since).
+
+To restore for real, load a file the same way into the live store's
+directory with Oxigraph stopped, as `copy-old-graph.sh import` does (#20).
+
 ## How it connects
 
 The sandbox instance has no inbound SSH port (by design; see the tofu
@@ -151,10 +265,22 @@ sandbox README). `ssh-via-ssm.sh` is used as the SSH `ProxyCommand`. It:
 2. opens an **SSM Session Manager** tunnel to the instance's sshd and
    carries the SSH connection over it.
 
-`inventory.py` writes `pyinfra/.ssh_config` (gitignored) with this set up.
-You can use it for a normal shell too:
+`inventory.py` writes `pyinfra/.ssh_config` (gitignored) with this set up,
+so it exists only after one `pyinfra pyinfra/inventory.py ...` run. Plain
+`ssh` to the instance (without that file) can't connect: there's no
+port 22. With the file, and `AWS_PROFILE` set, you can use it for a
+normal shell too:
 
     ssh -F pyinfra/.ssh_config "$(cd tofu/environments/sandbox && tofu output -raw instance_id)"
+
+Without the repo set up, a shell needs only the AWS CLI, the plugin and
+the profile:
+
+    aws ssm start-session --profile sensein-sso --region us-east-2 --target "$(cd tofu/environments/sandbox && tofu output -raw instance_id)"
+
+(or the instance ID, `i-008a0c667a85dd0f4` today), then `sudo su - ubuntu`.
+The console's **Session Manager** tab works too; its **EC2 Instance
+Connect** tab doesn't, because it needs port 22.
 
 This is option 2 ("SSM-based execution") of `decisions.md` §5.
 

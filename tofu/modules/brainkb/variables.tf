@@ -121,7 +121,7 @@ variable "fsx_storage_capacity_gb" {
 }
 
 variable "fsx_deployment_type" {
-  description = "FSx for Lustre deployment type. SCRATCH_2 (cheaper, single-AZ, temporary storage) for sandbox testing; PERSISTENT_2 (multi-AZ, backups) for production."
+  description = "FSx for Lustre deployment type. PERSISTENT_2 is required for the S3 data repository association in storage.tf; SCRATCH_2 has no replication and doesn't support it."
   type        = string
   default     = "SCRATCH_2"
 
@@ -149,15 +149,26 @@ variable "fsx_data_compression" {
 }
 
 variable "fsx_s3_import_events" {
-  description = "S3 events that trigger FSx import (S3 → FSx). Conservative default omits DELETED — a delete on S3 does not silently wipe the FSx side, per decisions.md §2."
+  description = "S3 events that trigger FSx import (S3 → FSx). The default omits DELETED, so deleting an object in S3 does not delete the file on FSx."
   type        = list(string)
   default     = ["NEW", "CHANGED"]
 }
 
 variable "fsx_s3_export_events" {
-  description = "FSx events that trigger S3 export (FSx → S3). Conservative default omits DELETED — a bad SPARQL DELETE or migration does not silently wipe the S3 mirror."
+  description = "FSx events that trigger S3 export (FSx → S3). The default omits DELETED, so deleting a file on FSx does not delete it in S3. It does not protect against a bad SPARQL DELETE or migration, which changes files; bucket versioning keeps the earlier versions."
   type        = list(string)
   default     = ["NEW", "CHANGED"]
+}
+
+variable "data_bucket_noncurrent_version_days" {
+  description = "Days S3 keeps an old (noncurrent) version of an object in the data bucket before deleting it. This is the window for recovering from a bad write."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.data_bucket_noncurrent_version_days >= 1
+    error_message = "data_bucket_noncurrent_version_days must be at least 1."
+  }
 }
 
 variable "data_bucket_name" {

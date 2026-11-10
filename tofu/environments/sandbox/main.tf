@@ -29,4 +29,6 @@ module "brainkb" {
   create_app_dns_records = var.create_app_dns_records
 
   enable_fsx = var.enable_fsx
+  # PERSISTENT_2: the FSx <-> S3 data repository association needs it.
+  fsx_deployment_type = "PERSISTENT_2"
 }

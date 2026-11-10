@@ -108,6 +108,21 @@ REPOS = [
 
 BUILD_UI = str(host.data.get("build_ui", True)).lower() not in ("false", "0", "no")
 
+# FSx for Lustre, when tofu provisions it (enable_fsx = true). It holds
+# the nightly graph backups, which its S3 link copies to S3.
+FSX_DNS_NAME = host.data.get("fsx_dns_name")
+FSX_MOUNT_NAME = host.data.get("fsx_mount_name")
+FSX_MOUNT_POINT = "/fsx"
+BACKUP_DIR = f"{FSX_MOUNT_POINT}/backups"
+BACKUP_KEEP = 7
+
+# Oxigraph's live data stays on the server's own disk, as in production.
+# On FSx, a mount that failed at boot left Oxigraph without its data and
+# hung Docker, which had touched /fsx (2026-11-09). Earlier deploys put it
+# at /fsx/oxigraph-db; the deploy copies it from there once (below).
+OXIGRAPH_DATA_DIR = "/home/ubuntu/oxigraph-db"
+OLD_FSX_DATA_DIR = f"{FSX_MOUNT_POINT}/oxigraph-db"
+
 # Values that differ from the co-tenant sandbox the templates were written
 # for. They're applied last, so they win over anything in the secrets files
 # (which may be copies of the co-tenant .env files).
@@ -120,9 +135,10 @@ BACKEND_SETTINGS = {
     "USERMANAGEMENT_PUBLIC_BASE_URL": f"https://usermanagement.{HOSTNAME}",
     "USERMANAGEMENT_FRONTEND_CALLBACK_URL": f"https://{HOSTNAME}/auth/callback",
     "CORS_ALLOWED_ORIGINS": f"https://{HOSTNAME}",
-    # Blank = Docker named volumes. The co-tenant .env points these at
-    # host directories that don't exist on this instance.
-    "OXIGRAPH_DATA_PATH": "",
+    # Data in a directory on the server's disk; temp files on a local named
+    # volume. The co-tenant .env points these at directories that don't
+    # exist here.
+    "OXIGRAPH_DATA_PATH": OXIGRAPH_DATA_DIR,
     "OXIGRAPH_TMP_PATH": "",
 }
 UI_SETTINGS = {
@@ -259,6 +275,87 @@ server.shell(
     ],
 )
 
+# ---- FSx for Lustre ---------------------------------------------------------
+# The Lustre client is a kernel module, built per kernel version: AWS
+# publishes lustre-client-modules-<kernel>. If the running kernel has no
+# build (a fresh kernel AWS hasn't caught up with), this stops before
+# mounting anything. After a kernel upgrade and reboot, re-run the deploy
+# to install the matching module.
+
+if FSX_DNS_NAME:
+    server.shell(
+        name="Add AWS's FSx Lustre client apt repository",
+        commands=[
+            "test -s /usr/share/keyrings/fsx-ubuntu-public-key.gpg || "
+            "curl -fsSL https://fsx-lustre-client-repo-public-keys.s3.amazonaws.com/fsx-ubuntu-public-key.asc "
+            "| gpg --dearmor -o /usr/share/keyrings/fsx-ubuntu-public-key.gpg",
+            ". /etc/os-release && echo \"deb [signed-by=/usr/share/keyrings/fsx-ubuntu-public-key.gpg] "
+            "https://fsx-lustre-client-repo.s3.amazonaws.com/ubuntu $VERSION_CODENAME main\" "
+            "> /etc/apt/sources.list.d/fsxlustreclientrepo.list",
+            "apt-get update -qq",
+        ],
+        _sudo=True,
+    )
+    server.shell(
+        name="Install the Lustre client for the running kernel",
+        commands=[
+            'pkg="lustre-client-modules-$(uname -r)"; '
+            'apt-cache show "$pkg" >/dev/null 2>&1 || '
+            '{ echo "No $pkg in the FSx client repo: AWS has no Lustre build for kernel $(uname -r) yet." >&2; exit 1; }; '
+            'DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$pkg"'
+        ],
+        _sudo=True,
+    )
+    # The module above only fits today's kernel. Ubuntu installs kernel
+    # updates on its own, and after the reboot that activates one, /fsx
+    # wouldn't mount until the deploy ran again. lustre-client-modules-aws
+    # follows the linux-aws kernel package, so apt installs the matching
+    # module alongside each new kernel.
+    server.shell(
+        name="Install the Lustre client for future kernels (lustre-client-modules-aws)",
+        commands=["DEBIAN_FRONTEND=noninteractive apt-get install -y -qq lustre-client-modules-aws"],
+        _sudo=True,
+    )
+    server.shell(
+        name="Check the Lustre client fits the kernel the next reboot will use",
+        commands=[
+            'newest="$(ls -1 /boot/vmlinuz-* | sed "s|/boot/vmlinuz-||" | sort -V | tail -n 1)"; '
+            'find "/lib/modules/$newest" -name "lustre.ko*" 2>/dev/null | grep -q . || '
+            '{ echo "Kernel $newest is installed but has no Lustre module, so /fsx would not '
+            'mount after a reboot. Don\'t reboot; re-run the deploy once AWS publishes '
+            'lustre-client-modules-$newest." >&2; exit 1; }'
+        ],
+        _sudo=True,
+    )
+    files.directory(
+        name=f"Create the {FSX_MOUNT_POINT} mount point",
+        path=FSX_MOUNT_POINT,
+        _sudo=True,
+    )
+    files.line(
+        name=f"Mount FSx at {FSX_MOUNT_POINT} on boot",
+        path="/etc/fstab",
+        line=rf"^{re.escape(FSX_DNS_NAME)}@tcp:/{FSX_MOUNT_NAME} ",
+        replace=(
+            f"{FSX_DNS_NAME}@tcp:/{FSX_MOUNT_NAME} {FSX_MOUNT_POINT} lustre "
+            # _netdev already orders the mount after the network is up. Don't
+            # add AWS's x-systemd.requires=network.service: that unit is
+            # Amazon Linux's, Ubuntu has none, and systemd then refuses to
+            # mount /fsx at boot ("Unit network.service not found").
+            "defaults,relatime,flock,_netdev,x-systemd.automount 0 0"
+        ),
+        _sudo=True,
+    )
+    server.shell(
+        name=f"Mount FSx at {FSX_MOUNT_POINT}",
+        commands=[
+            f"mountpoint -q {FSX_MOUNT_POINT} || mount {FSX_MOUNT_POINT}",
+            f"mountpoint -q {FSX_MOUNT_POINT}",
+            f"mkdir -p {BACKUP_DIR}",
+        ],
+        _sudo=True,
+    )
+
 # ---- Code ------------------------------------------------------------------
 
 for url, path, branch in REPOS:
@@ -307,6 +404,52 @@ server.shell(
     ],
     _sudo=True,
 )
+# `brainkb-graph-count` prints the store's record count (quads in the
+# default and named graphs). The move below and the backup checks use it.
+GRAPH_COUNT_SCRIPT = """#!/usr/bin/env bash
+# Number of records in the sandbox's Oxigraph store. Written by pyinfra/deploy.py.
+set -euo pipefail
+docker run --rm --network brainkb-sandbox-network curlimages/curl:8.10.1 -sSf -X POST \\
+  -H 'Content-Type: application/sparql-query' -H 'Accept: application/sparql-results+json' \\
+  --data-binary 'SELECT (COUNT(*) AS ?n) WHERE { { ?s ?p ?o } UNION { GRAPH ?g { ?s ?p ?o } } }' \\
+  "http://${1:-brainkb-oxigraph-sandbox}:7878/query" | grep -oE '"value" *: *"[0-9]+"' | grep -oE '[0-9]+'
+"""
+files.put(
+    name="Install brainkb-graph-count",
+    src=io.StringIO(GRAPH_COUNT_SCRIPT),
+    dest="/usr/local/bin/brainkb-graph-count",
+    mode="755",
+    _sudo=True,
+)
+
+MOVE_COUNT_FILE = "/var/tmp/oxigraph-move-count"
+data_commands = []
+if FSX_DNS_NAME:
+    # One-time move off FSx: only while the local directory has no store
+    # yet and FSx has one. The count is taken first (from the running
+    # Oxigraph), then Oxigraph is stopped so the copy is consistent. The
+    # copy goes to a temporary directory, renamed into place only once cp
+    # has finished, so a copy that fails halfway is never used. Compose
+    # starts Oxigraph on the local copy just below, and the step after it
+    # compares the count. The FSx copy is left in place.
+    d, tmp = OXIGRAPH_DATA_DIR, f"{OXIGRAPH_DATA_DIR}.partial"
+    data_commands.append(
+        f"if [ ! -e {d}/CURRENT ] && [ -e {OLD_FSX_DATA_DIR}/CURRENT ] "
+        f"&& findmnt -n -t lustre {FSX_MOUNT_POINT} >/dev/null; then "
+        f"brainkb-graph-count > {MOVE_COUNT_FILE} 2>/dev/null || : > {MOVE_COUNT_FILE}; "
+        "docker stop brainkb-oxigraph-sandbox >/dev/null 2>&1 || true; "
+        f"{{ rm -rf {tmp} && cp -a {OLD_FSX_DATA_DIR} {tmp}; }} "
+        f"|| {{ echo 'Copying {OLD_FSX_DATA_DIR} failed; nothing was switched over. Re-run the deploy.' >&2; exit 1; }}; "
+        f"rmdir {d} 2>/dev/null || true; "
+        f"[ ! -e {d} ] || {{ echo '{d} exists but holds no store; move it aside and re-run' >&2; exit 1; }}; "
+        f"mv {tmp} {d} || exit 1; echo 'Copied Oxigraph data from {OLD_FSX_DATA_DIR}'; fi"
+    )
+data_commands.append(f"mkdir -p {OXIGRAPH_DATA_DIR}")
+server.shell(
+    name=f"Keep Oxigraph's data in {OXIGRAPH_DATA_DIR}",
+    commands=data_commands,
+    _sudo=True,
+)
 server.shell(
     name="Build and start the backend stack",
     commands=[f"cd {INFRA_DIR}/sandbox && docker compose up -d --build"],
@@ -326,6 +469,73 @@ server.shell(
     ],
     _sudo=True,
 )
+if FSX_DNS_NAME:
+    server.shell(
+        name="Check the record count after moving Oxigraph's data",
+        # Only right after the move above, while the count file exists. A
+        # mismatch fails the deploy and keeps the file, so a re-run checks again.
+        commands=[
+            f"if [ -e {MOVE_COUNT_FILE} ]; then "
+            f'expected="$(cat {MOVE_COUNT_FILE})"; n=""; '
+            'for i in $(seq 1 30); do n="$(brainkb-graph-count 2>/dev/null)" && break; sleep 5; done; '
+            'echo "Oxigraph has ${n:-no answer} records; before the move: ${expected:-not counted}"; '
+            '[ -n "$n" ] || exit 1; '
+            '{ [ -z "$expected" ] || [ "$n" = "$expected" ]; } || { echo "Record counts differ" >&2; exit 1; }; '
+            f"rm -f {MOVE_COUNT_FILE}; fi"
+        ],
+        _sudo=True,
+    )
+
+# ---- Nightly graph backup ---------------------------------------------------
+# A full export of the store (GET /store as gzipped N-Quads, the same
+# export copy-old-graph.sh uses), which Oxigraph serves from a consistent
+# snapshot without stopping. It's written to a local temp file first, so a
+# failed export never lands on FSx. The move to FSx is a copy across file
+# systems, which the S3 link may see partway; its final export is the
+# finished file. The newest BACKUP_KEEP stay on FSx; S3 keeps the copies
+# the link made (it doesn't export deletes).
+
+BACKUP_SCRIPT = f"""#!/usr/bin/env bash
+# Nightly export of the sandbox's graph store. Written by pyinfra/deploy.py.
+set -euo pipefail
+dir={BACKUP_DIR}
+# Touch /fsx first so the automount fires, then check FSx itself is there:
+# an automount point counts as a mountpoint even when the mount failed.
+ls {FSX_MOUNT_POINT} >/dev/null 2>&1 || true
+if ! findmnt -n -t lustre {FSX_MOUNT_POINT} >/dev/null; then
+  echo "$(date -Is) FSx is not mounted at {FSX_MOUNT_POINT}; no backup written" >&2
+  exit 1
+fi
+mkdir -p "$dir"
+name="graph-$(date -u +%Y-%m-%d).nq.gz"
+tmp="$(mktemp /var/tmp/graph-backup.XXXXXX)"
+trap 'rm -f "$tmp"' EXIT
+docker run --rm --network brainkb-sandbox-network curlimages/curl:8.10.1 -sSf \\
+  -H 'Accept: application/n-quads' http://brainkb-oxigraph-sandbox:7878/store | gzip -1 > "$tmp"
+chmod 644 "$tmp"
+mv "$tmp" "$dir/$name"
+echo "$(date -Is) wrote $dir/$name ($(du -h "$dir/$name" | cut -f1))"
+ls -1t "$dir"/graph-*.nq.gz | tail -n +{BACKUP_KEEP + 1} | xargs -r rm -f --
+"""
+
+if FSX_DNS_NAME:
+    files.put(
+        name="Install the nightly graph backup script",
+        src=io.StringIO(BACKUP_SCRIPT),
+        dest="/usr/local/bin/brainkb-graph-backup",
+        mode="755",
+        _sudo=True,
+    )
+    files.put(
+        name="Run the graph backup nightly (03:17 UTC)",
+        src=io.StringIO(
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+            "17 3 * * * root /usr/local/bin/brainkb-graph-backup >> /var/log/brainkb-graph-backup.log 2>&1\n"
+        ),
+        dest="/etc/cron.d/brainkb-graph-backup",
+        mode="644",
+        _sudo=True,
+    )
 
 # ---- UI --------------------------------------------------------------------
 

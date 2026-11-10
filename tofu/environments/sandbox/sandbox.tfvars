@@ -82,10 +82,10 @@ create_app_dns_records = true
 # NEVER set true in production — import existing records instead.
 dns_allow_overwrite = false
 
-# Sandbox does not create FSx by default — bootstrap.md notes it's
-# not needed for sandbox use, and Oxigraph will fall back to a Docker
-# named volume when enable_fsx is false. Flipping to true adds an
-# ~$100+/month Lustre bill; only worth it if we want sandbox to
-# mirror production storage-wise (e.g., testing FSx-related PyInfra
-# behavior before rolling it into prod).
-enable_fsx = false
+# FSx for Lustre + its own S3 bucket, like production (team decision,
+# 2026-11-04: the test sandbox should match production's storage).
+# Its own file system and bucket, not production's. PERSISTENT_2,
+# 1.2 TB, 125 MB/s/TiB: about $175/month. pyinfra/deploy.py mounts it
+# at /fsx and writes nightly graph backups to /fsx/backups (the live
+# Oxigraph data stays on the instance's disk).
+enable_fsx = true

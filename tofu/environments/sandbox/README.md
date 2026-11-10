@@ -72,27 +72,34 @@ and its three public subnets in us-east-2 (see `discovery.md`).
   provider). That's set when the services are deployed, not here: see
   `sandbox/new-server-setup.md` for installing the apps on this server.
 
-**Storage — deliberately off by default in sandbox**
+**Storage — FSx for Lustre + S3, like production**
 
-- `enable_fsx = false` in `sandbox.tfvars`. No FSx filesystem, no S3
-  data bucket. Oxigraph will use a plain Docker named volume on the
-  EC2's EBS root, per `bootstrap.md` §Oxigraph.
-- The module code for FSx + S3 exists (`storage.tf`) — flipping
-  `enable_fsx = true` provisions:
-  - S3 bucket `sensein-brainkb-sandbox-data` (versioned, encrypted,
-    private). The bucket, FSx filesystem and S3 link always carry
-    `prevent_destroy = true`.
-  - FSx SG allowing Lustre client protocol (988, 1018-1023) from the
-    app SG only.
-  - FSx for Lustre filesystem — `SCRATCH_2` by default (cheaper,
-    single-AZ; production would flip to `PERSISTENT_2`), 1.2 TB, LZ4
-    compression, in the same subnet as the EC2.
-  - FSx ↔ S3 data-repository association with **conservative
-    deletion policy** — imports/exports on NEW+CHANGED events only,
-    not DELETED (per `decisions.md` §2).
-- Cost signal: enabling FSx adds ~$100+/month for Lustre alone. Only
-  worth it when we specifically want to test FSx-related PyInfra
-  behavior before it goes into prod.
+`enable_fsx = true` in `sandbox.tfvars` (team decision, 2026-11-04, so
+the test sandbox matches production's storage). It's the sandbox's own
+file system and bucket, separate from production's. It provisions:
+
+- S3 bucket `sensein-brainkb-sandbox-data` (versioned, encrypted,
+  private).
+- FSx for Lustre, `PERSISTENT_2`, 1.2 TB, 125 MB/s/TiB, LZ4
+  compression, in the same subnet as the EC2.
+- The FSx ↔ S3 data-repository association: imports/exports on
+  NEW+CHANGED events only, not DELETED, so deleting a file on one side
+  doesn't delete it on the other. It needs `PERSISTENT_2`; `SCRATCH_2`
+  doesn't support it.
+- A lifecycle rule on the bucket: old versions of a file are deleted
+  after 30 days, and unfinished uploads after 7. Versioning, not the
+  missing DELETED event, is what protects against a bad write such as a
+  wrong SPARQL DELETE: S3 keeps the earlier versions for those 30 days.
+- FSx security group: Lustre ports (988, 1018-1023) between the file
+  servers and with the app host, in both directions. The app SG gets
+  the matching inbound rules from FSx.
+- The bucket, file system and association all carry
+  `prevent_destroy = true`.
+
+Cost: about $175/month for the file system, plus S3 storage.
+`pyinfra/deploy.py` installs the Lustre client, mounts the file system
+at `/fsx`, and writes a nightly export of the graph store to
+`/fsx/backups/`. Oxigraph's live data stays on the instance's own disk.
 
 **Not yet in this environment** (own PRs, in order):
 
@@ -168,12 +175,12 @@ not the ALB's own AWS-generated name.
 
     tofu destroy -var-file=sandbox.tfvars
 
-Safe today because sandbox has no persistent data (`enable_fsx =
-false`). If FSx has been enabled, the S3 bucket, FSx filesystem and
-S3 link are protected by `prevent_destroy = true` in
-`modules/brainkb/storage.tf`; OpenTofu doesn't allow that to be a
+A plain destroy stops at the S3 bucket, FSx file system and S3 link:
+they're protected by `prevent_destroy = true` in
+`modules/brainkb/storage.tf`. OpenTofu doesn't allow that to be a
 variable, so to tear them down on purpose, change it to `false`
-locally first (don't commit that).
+locally first (don't commit that). Check the bucket holds nothing you
+need first: it's where the graph data is mirrored.
 
 ## Common issues
 
