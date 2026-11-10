@@ -271,6 +271,20 @@ folder, stops the new sandbox's backend, restores the dump
 (`pg_restore --clean --single-transaction`, so a failure changes
 nothing), starts the backend again and compares the counts.
 
+**Delete the Postgres dump once the migrated sandbox is confirmed.** It
+holds users' emails, roles, PAT records and stored OAuth tokens, and
+nothing removes it on its own: the bucket's 30-day rule only expires
+*old* versions. Remove it from FSx (on the server; the S3 link doesn't
+export deletes) and every version of it from S3 (from a laptop):
+
+    sudo rm /fsx/migrations/old-sandbox-postgres-*.dump
+    b=sensein-brainkb-sandbox-data; p=migrations/old-sandbox-postgres-
+    aws s3api delete-objects --bucket $b --delete "$(aws s3api list-object-versions --bucket $b --prefix $p --query '{Objects: Versions[].{Key: Key, VersionId: VersionId}}' --output json)"
+    aws s3api list-object-versions --bucket $b --prefix $p    # should list nothing
+
+The graph export (`old-sandbox-*.nq.gz`) can stay, as a snapshot of the
+old sandbox.
+
 The export and the record counts reach Oxigraph directly on each host's
 `brainkb-sandbox-network` with a throwaway `curlimages/curl` container,
 so no Oxigraph password is involved. The production host is reached over
