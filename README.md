@@ -67,11 +67,12 @@ Two tools, two jobs:
   stack, the UI, and the FSx mount. One command, safe to re-run; it reads
   the server it targets from `tofu output`.
 
-Secrets (passwords, OAuth client secrets, session keys) are not in this
-repo and not in files on anyone's laptop: they live in **AWS SSM Parameter
-Store** under `/brainkb/<environment>/`, and PyInfra fills them into the
-env templates at deploy time. `pyinfra/push-secrets.py` stores or updates
-one.
+Secrets (passwords, OAuth client secrets, session keys) are never in this
+repo. For the sandbox they also aren't in files on anyone's laptop: they
+live in **AWS SSM Parameter Store** under `/brainkb/sandbox/`, and PyInfra
+fills them into the env templates at deploy time.
+`pyinfra/push-secrets.py` stores or updates one. Production still keeps
+its secrets in `.env` files on its server.
 
 Where things stand:
 
@@ -164,7 +165,8 @@ see `production/README.md` and `sandbox/README.md` for details.
   (the first apply only records the existing resources, and changes
   nothing). Still set up and deployed by hand.
 - **Not yet automated:** OAuth callback URLs at GitHub/ORCID/Globus, MCP,
-  Ollama, and production's server setup.
+  Ollama, production's server setup, and backups and graph history
+  beyond the sandbox's nightly export (rules to be settled in #24).
 
 See each environment's README, `pyinfra/README.md`, and `bootstrap.md` for
 details, and `decisions.md` for the reasoning.
