@@ -16,6 +16,7 @@ command deploys new code, and also rebuilds a fresh instance from nothing.
 | `ssh-via-ssm.sh` | Connects without port 22 (see "How it connects") |
 | `push-secrets.py` | Stores secrets in SSM Parameter Store (see "Secrets") |
 | `fetch-secrets.sh` | One-time copy of the env files already on the server |
+| `copy-old-graph.sh` | One-time copy of the old sandbox's graph data (see "Copying the old sandbox's graph data") |
 | `secrets/` | Optional local secrets, only for the one-time move or `secrets_source=local`. Gitignored; never commit it. |
 
 ## One-time setup on your laptop
@@ -253,6 +254,65 @@ To run it by hand: `sudo /usr/local/bin/brainkb-graph-backup`.
 
 To restore for real, load a file the same way into the live store's
 directory with Oxigraph stopped, as `copy-old-graph.sh import` does (#20).
+
+### Copying the old sandbox's graph data
+
+The old sandbox (sandbox.brainkb.org, sharing the production host) keeps
+its graph data on that host's disk. `copy-old-graph.sh` copies it into
+the tofu sandbox's Oxigraph, in two steps:
+
+    pyinfra/copy-old-graph.sh export
+    pyinfra/copy-old-graph.sh import old-sandbox-<date>.nq.gz   # the name export prints
+
+`export` counts the old sandbox's records and streams the whole store, as
+gzipped N-Quads, to `s3://<data bucket>/migrations/`. It only reads: the
+old sandbox keeps running, and nothing is written on the production host.
+The file then shows up on FSx at `/fsx/migrations/`, and stays in S3 as a
+backup.
+
+`import` checks the new Oxigraph is empty, loads the file with Oxigraph's
+bulk loader (`oxigraph load`), and checks the record counts match. The
+bulk loader needs the database to itself, so the sandbox's Oxigraph is
+stopped while it runs and started again afterwards. Loading through the
+HTTP API instead holds the whole load in memory, which a 4 GB instance
+can't do for the old sandbox's ~23 million records. It refuses to load into a non-empty store, because
+a second import would duplicate blank nodes; `FORCE=1` overrides that
+(fine when the only records are the few the backend writes at startup).
+
+The graphs also have to be registered in the app's Postgres database
+(spaces, which graphs belong to them, members and permissions); without
+that the UI says "graph is not part of any space". Copy the old
+sandbox's whole app database with:
+
+    pyinfra/copy-old-graph.sh postgres
+
+It shows the space counts on both sides and asks for `yes`, because it
+**replaces** the new sandbox's database (users, spaces, permissions,
+jobs). It dumps the old database (`pg_dump`, read only) to the same S3
+folder, stops the new sandbox's backend, restores the dump
+(`pg_restore --clean --single-transaction`, so a failure changes
+nothing), starts the backend again and compares the counts.
+
+**Delete the Postgres dump once the migrated sandbox is confirmed.** It
+holds users' emails, roles, PAT records and stored OAuth tokens, and
+nothing removes it on its own: the bucket's 30-day rule only expires
+*old* versions. Remove it from FSx (on the server; the S3 link doesn't
+export deletes) and every version of it from S3 (from a laptop):
+
+    sudo rm /fsx/migrations/old-sandbox-postgres-*.dump
+    b=sensein-brainkb-sandbox-data; p=migrations/old-sandbox-postgres-
+    aws s3api delete-objects --bucket $b --delete "$(aws s3api list-object-versions --bucket $b --prefix $p --query '{Objects: Versions[].{Key: Key, VersionId: VersionId}}' --output json)"
+    aws s3api list-object-versions --bucket $b --prefix $p    # should list nothing
+
+The graph export (`old-sandbox-*.nq.gz`) can stay, as a snapshot of the
+old sandbox.
+
+The export and the record counts reach Oxigraph directly on each host's
+`brainkb-sandbox-network` with a throwaway `curlimages/curl` container,
+so no Oxigraph password is involved. The production host is reached over
+SSH on its public IP (it has port 22 open and no SSM role), with a
+60-second key from EC2 Instance Connect, the same as `ssh-via-ssm.sh`
+does for the sandbox.
 
 ## How it connects
 
