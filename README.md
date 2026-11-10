@@ -80,7 +80,7 @@ Where things stand:
 | Address | test.brainkb.org (and `usermanagement.`, `mlservice.`, `queryservice.` under it) | brainkb.org |
 | Server built by | OpenTofu (`tofu/environments/sandbox/`) | by hand; adopted into OpenTofu as-is (`tofu/environments/production/`, import only) |
 | Set up by | PyInfra (`pyinfra/`) | by hand |
-| Oxigraph data | Server's disk (`/home/ubuntu/oxigraph-db`); nightly backups to FSx at `/fsx/backups` | FSx for Lustre |
+| Oxigraph data | Server's disk (`/home/ubuntu/oxigraph-db`); nightly backups to FSx at `/fsx/backups` | Server's disk (`/home/ubuntu/oxigraph-db`), backups to FSx (per production's recovery runbook) |
 | Secrets | SSM Parameter Store, `/brainkb/sandbox/` | `.env` files on the server |
 
 The older sandbox at sandbox.brainkb.org runs on the production server
